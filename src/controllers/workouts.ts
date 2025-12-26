@@ -1,6 +1,5 @@
 import { IngestData } from '../models/IngestData';
 import { IngestResponse } from '../models/IngestResponse';
-import { WorkoutData } from '../models/Workout';
 import { storage } from '../storage';
 import { Logger } from '../utils/logger';
 
@@ -14,11 +13,11 @@ export const saveWorkouts = async (
     const response: IngestResponse = {};
     const workouts = ingestData.data.workouts;
 
-    if (!workouts || !workouts.length) {
+    if ((workouts?.length ?? 0) === 0) {
       log?.debug('No workout data provided');
       response.workouts = {
-        success: true,
         message: 'No workout data provided',
+        success: true,
       };
       timer?.end('info', 'No workouts to save');
       return response;
@@ -27,11 +26,11 @@ export const saveWorkouts = async (
     log?.debug('Processing workouts', { count: workouts.length });
 
     // Save workouts to file storage
-    const result = await storage.saveWorkouts(workouts as WorkoutData[]);
+    const result = await storage.saveWorkouts(workouts);
 
     response.workouts = {
+      message: `${String(result.saved)} workouts saved, ${String(result.updated)} updated`,
       success: result.success,
-      message: `${result.saved} workouts saved, ${result.updated} updated`,
     };
 
     timer?.end('info', 'Workouts saved', {
@@ -45,11 +44,12 @@ export const saveWorkouts = async (
       error: error instanceof Error ? error.message : 'Unknown error',
     });
 
-    const errorResponse: IngestResponse = {};
-    errorResponse.workouts = {
-      success: false,
-      message: 'Workouts not saved',
-      error: error instanceof Error ? error.message : 'An error occurred',
+    const errorResponse: IngestResponse = {
+      workouts: {
+        error: error instanceof Error ? error.message : 'An error occurred',
+        message: 'Workouts not saved',
+        success: false,
+      },
     };
 
     return errorResponse;

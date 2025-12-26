@@ -40,27 +40,98 @@ export default tseslint.config(
   // Custom rules
   {
     rules: {
+      '@typescript-eslint/adjacent-overload-signatures': 'off',
       // TypeScript adjustments
       '@typescript-eslint/explicit-function-return-type': 'off',
       '@typescript-eslint/explicit-module-boundary-types': 'off',
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
-      '@typescript-eslint/adjacent-overload-signatures': 'off',
 
-      // Unicorn adjustments for Express
-      'unicorn/prevent-abbreviations': [
+      // Node.js adjustments for Bun runtime
+      'n/no-missing-import': 'off',
+
+      'n/no-unpublished-import': 'off',
+
+      'n/no-unsupported-features/node-builtins': 'off', // Bun has different capabilities
+      // Perfectionist rule customizations
+      'perfectionist/sort-classes': [
         'error',
         {
-          replacements: {
-            req: false,
-            res: false,
-            err: false,
-            env: false,
-            acc: false,
-          },
+          groups: [
+            'static-property',
+            'property',
+            'constructor',
+            'static-method',
+            'method',
+            'private-method',
+            'unknown',
+          ],
+          partitionByComment: true,
+          type: 'natural',
         },
       ],
-
+      'perfectionist/sort-enums': [
+        'error',
+        {
+          partitionByComment: true,
+          type: 'natural',
+        },
+      ],
+      'perfectionist/sort-imports': [
+        'error',
+        {
+          environment: 'bun',
+          groups: [
+            'builtin',
+            'external',
+            'internal',
+            ['parent', 'sibling'],
+            'index',
+            'side-effect',
+            'type',
+          ],
+          newlinesBetween: 1,
+          order: 'asc',
+          type: 'natural',
+        },
+      ],
+      'perfectionist/sort-interfaces': [
+        'error',
+        {
+          groups: [
+            'required-property',
+            'required-method',
+            'optional-property',
+            'optional-method',
+            'unknown',
+          ],
+          partitionByComment: true,
+          type: 'natural',
+        },
+      ],
+      'perfectionist/sort-object-types': [
+        'error',
+        {
+          groups: ['required-property', 'optional-property', 'unknown'],
+          partitionByComment: true,
+          type: 'natural',
+        },
+      ],
+      'perfectionist/sort-objects': [
+        'error',
+        {
+          partitionByComment: true,
+          partitionByNewLine: true,
+          type: 'natural',
+        },
+      ],
+      'perfectionist/sort-union-types': [
+        'error',
+        {
+          groups: ['named', 'keyword', 'literal', 'nullish'],
+          type: 'natural',
+        },
+      ],
       // Allow both camelCase and PascalCase filenames (for models)
       'unicorn/filename-case': [
         'error',
@@ -72,19 +143,17 @@ export default tseslint.config(
         },
       ],
 
-      // Node.js adjustments for Bun runtime
-      'n/no-missing-import': 'off',
-      'n/no-unpublished-import': 'off',
-      'n/no-unsupported-features/node-builtins': 'off', // Bun has different capabilities
-
-      // Perfectionist import sorting
-      'perfectionist/sort-imports': [
+      // Unicorn adjustments for Express
+      'unicorn/prevent-abbreviations': [
         'error',
         {
-          type: 'natural',
-          order: 'asc',
-          groups: ['builtin', 'external', 'internal', ['parent', 'sibling'], 'index', 'type'],
-          newlinesBetween: 1,
+          replacements: {
+            acc: false,
+            env: false,
+            err: false,
+            req: false,
+            res: false,
+          },
         },
       ],
     },

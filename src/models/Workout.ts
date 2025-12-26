@@ -1,82 +1,83 @@
-interface IQuantityMetric {
-  qty: number;
-  date: Date;
-  units: string;
-  source: string;
-}
-
-interface IMeasurement {
-  qty: number;
-  units: string;
-  date: Date;
-  source: string;
-}
-
-interface IHeartRate extends IMeasurement {
-  Min: number;
-  Avg: number;
-  Max: number;
-  date: Date;
-  units: string;
-  source: string;
-}
-
 export interface ILocation {
   latitude: number;
   longitude: number;
+  timestamp: Date;
+  altitude?: number;
   course?: number;
   courseAccuracy?: number;
+  horizontalAccuracy?: number;
   speed?: number;
   speedAccuracy?: number;
-  altitude?: number;
   verticalAccuracy?: number;
-  horizontalAccuracy?: number;
-  timestamp: Date;
 }
 
 export interface IRoute {
-  workoutId: string;
   locations: ILocation[];
+  workoutId: string;
 }
 
 export interface WorkoutData {
+  activeEnergy?: IQuantityMetric;
+  activeEnergyBurned?: IMeasurement;
+  // --- Optional fields ---
+  duration: number;
+  end: Date;
   id: string;
   name: string;
   start: Date;
-  end: Date;
-  duration: number;
-  // --- Optional fields ---
   distance?: IMeasurement;
-  activeEnergyBurned?: IMeasurement;
-  activeEnergy?: IQuantityMetric;
   heartRateData?: IHeartRate[];
   heartRateRecovery?: IHeartRate[];
-  stepCount?: IQuantityMetric[];
-  temperature?: IMeasurement;
   humidity?: IMeasurement;
   intensity?: IMeasurement;
   route?: ILocation[];
+  stepCount?: IQuantityMetric[];
+  temperature?: IMeasurement;
 }
 
-export function mapWorkoutData(data: WorkoutData) {
-  const { id, route, ...rest } = data;
-  void route; // Intentionally unused - route is stored separately
+interface IHeartRate extends IMeasurement {
+  Avg: number;
+  date: Date;
+  Max: number;
+  Min: number;
+  source: string;
+  units: string;
+}
 
-  return {
-    workoutId: id,
-    ...rest,
-    start: new Date(rest.start),
-    end: new Date(rest.end),
-  };
+interface IMeasurement {
+  date: Date;
+  qty: number;
+  source: string;
+  units: string;
+}
+
+interface IQuantityMetric {
+  date: Date;
+  qty: number;
+  source: string;
+  units: string;
 }
 
 export function mapRoute(data: WorkoutData): IRoute {
   return {
-    workoutId: data.id,
     locations:
       data.route?.map((loc) => ({
         ...loc,
         timestamp: new Date(loc.timestamp),
-      })) || [],
+      })) ?? [],
+    workoutId: data.id,
+  };
+}
+
+export function mapWorkoutData(data: WorkoutData) {
+  // Exclude route from workout data - it's stored separately
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- route is intentionally excluded
+  const { id, route, ...rest } = data;
+
+  return {
+    workoutId: id,
+    ...rest,
+    end: new Date(rest.end),
+    start: new Date(rest.start),
   };
 }

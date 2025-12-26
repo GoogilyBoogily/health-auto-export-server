@@ -1,6 +1,6 @@
-import { timingSafeEqual } from 'crypto';
+import { timingSafeEqual } from 'node:crypto';
 
-import { Request, Response, NextFunction } from 'express';
+import { NextFunction, Request, Response } from 'express';
 
 /**
  * Determine the reason for auth failure (for logging purposes only).
@@ -28,16 +28,16 @@ function isValidToken(provided: string, expected: string): boolean {
  */
 export const requireWriteAuth = (req: Request, res: Response, next: NextFunction) => {
   const token = req.headers['api-key'] as string;
-  const writeToken = process.env.WRITE_TOKEN || '';
+  const writeToken = process.env.WRITE_TOKEN ?? '';
 
   if (!token || !token.startsWith('sk-') || !isValidToken(token, writeToken)) {
-    req.log?.warn('Write authentication failed', {
-      reason: getAuthFailureReason(token),
+    req.log.warn('Write authentication failed', {
       path: req.path,
+      reason: getAuthFailureReason(token),
     });
     return res.status(401).json({ error: 'Unauthorized: Invalid write token' });
   }
 
-  req.log?.debug('Write authentication successful');
+  req.log.debug('Write authentication successful');
   next();
 };

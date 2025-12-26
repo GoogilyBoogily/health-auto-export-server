@@ -1,12 +1,12 @@
 export interface IngestResponse {
   metrics?: {
     success: boolean;
-    message?: string;
     error?: string;
+    message?: string;
   };
   workouts?: {
     success: boolean;
-    message?: string;
     error?: string;
+    message?: string;
   };
 }

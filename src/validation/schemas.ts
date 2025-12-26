@@ -4,52 +4,52 @@ import { z } from 'zod';
 const MetricEntrySchema = z.record(z.string(), z.unknown());
 
 const MetricDataSchema = z.object({
+  data: z.array(MetricEntrySchema).optional(),
   name: z.string(),
   units: z.string(),
-  data: z.array(MetricEntrySchema).optional(),
 });
 
 // Flexible measurement schema
 const MeasurementSchema = z
   .object({
-    qty: z.number(),
-    units: z.string(),
     date: z.union([z.string(), z.date()]),
+    qty: z.number(),
     source: z.string(),
+    units: z.string(),
   })
   .optional();
 
 // Location schema for workout routes
 const LocationSchema = z.object({
-  latitude: z.number(),
-  longitude: z.number(),
+  altitude: z.number().optional(),
   course: z.number().optional(),
   courseAccuracy: z.number().optional(),
+  horizontalAccuracy: z.number().optional(),
+  latitude: z.number(),
+  longitude: z.number(),
   speed: z.number().optional(),
   speedAccuracy: z.number().optional(),
-  altitude: z.number().optional(),
-  verticalAccuracy: z.number().optional(),
-  horizontalAccuracy: z.number().optional(),
   timestamp: z.union([z.string(), z.date()]),
+  verticalAccuracy: z.number().optional(),
 });
 
 // Workout data schema
 const WorkoutDataSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  start: z.union([z.string(), z.date()]),
-  end: z.union([z.string(), z.date()]),
-  duration: z.number(),
-  distance: MeasurementSchema,
-  activeEnergyBurned: MeasurementSchema,
   activeEnergy: z.record(z.string(), z.unknown()).optional(),
+  activeEnergyBurned: MeasurementSchema,
+  distance: MeasurementSchema,
+  duration: z.number(),
+  end: z.union([z.string(), z.date()]),
   heartRateData: z.array(z.record(z.string(), z.unknown())).optional(),
   heartRateRecovery: z.array(z.record(z.string(), z.unknown())).optional(),
+  humidity: MeasurementSchema,
+  id: z.string(),
+  intensity: MeasurementSchema,
+  name: z.string(),
+  route: z.array(LocationSchema).optional(),
+  start: z.union([z.string(), z.date()]),
   stepCount: z.array(z.record(z.string(), z.unknown())).optional(),
   temperature: MeasurementSchema,
-  humidity: MeasurementSchema,
-  intensity: MeasurementSchema,
-  route: z.array(LocationSchema).optional(),
 });
 
 // Main ingest data schema

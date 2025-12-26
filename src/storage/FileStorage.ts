@@ -1,60 +1,40 @@
-import * as path from 'path';
+import path from 'node:path';
 
-import {
-  ensureDir,
-  atomicWrite,
-  readJsonFile,
-  getDateKey,
-  getFilePath,
-  withLock,
-} from './fileHelpers';
-import { MetricDailyFile, WorkoutDailyFile, SaveResult, StoredWorkout, StoredRoute } from './types';
 import { Metric, MetricCommon } from '../models/Metric';
 import { MetricName } from '../models/MetricName';
-import { WorkoutData, mapWorkoutData, mapRoute } from '../models/Workout';
+import { mapRoute, mapWorkoutData, WorkoutData } from '../models/Workout';
 import { logger } from '../utils/logger';
+import {
+  atomicWrite,
+  ensureDirectory,
+  getDateKey,
+  getFilePath,
+  readJsonFile,
+  withLock,
+} from './fileHelpers';
+import { MetricDailyFile, SaveResult, StoredRoute, StoredWorkout, WorkoutDailyFile } from './types';
 
 export class FileStorage {
-  private dataDir: string;
+  private dataDirectory: string;
 
-  constructor(dataDir?: string) {
-    this.dataDir = dataDir || process.env.DATA_DIR || './data';
+  constructor(dataDirectory?: string) {
+    this.dataDirectoryectory = dataDirectory ?? process.env.DATA_DIR ?? './data';
   }
 
   /**
    * Initialize storage directories.
    */
   async init(): Promise<void> {
-    const resolvedPath = path.resolve(this.dataDir);
-    logger.info('Initializing file storage', { dataDir: resolvedPath });
+    const resolvedPath = path.resolve(this.dataDirectory);
+    logger.info('Initializing file storage', { dataDirectory: resolvedPath });
 
-    await ensureDir(path.join(this.dataDir, 'metrics'));
-    await ensureDir(path.join(this.dataDir, 'workouts'));
+    await ensureDirectory(path.join(this.dataDirectory, 'metrics'));
+    await ensureDirectory(path.join(this.dataDirectory, 'workouts'));
 
-    logger.info('File storage initialized', { dataDir: resolvedPath });
+    logger.info('File storage initialized', { dataDirectory: resolvedPath });
   }
 
   // === PATH HELPERS ===
-
-  private getMetricsFilePath(date: Date): string {
-    return getFilePath(path.join(this.dataDir, 'metrics'), date);
-  }
-
-  private getWorkoutsFilePath(date: Date): string {
-    return getFilePath(path.join(this.dataDir, 'workouts'), date);
-  }
-
-  // === METRICS ===
-
-  /**
-   * Create a deduplication key for a metric.
-   * Uses date ISO string + source to match MongoDB's unique index.
-   */
-  private getMetricKey(metric: Metric & MetricCommon): string {
-    const date = new Date(metric.date).toISOString();
-    const source = metric.source || '';
-    return `${date}|${source}`;
-  }
 
   /**
    * Save all metrics to storage (batch operation).
@@ -67,13 +47,12 @@ export class FileStorage {
     for (const [metricType, metrics] of Object.entries(metricsByType)) {
       for (const metric of metrics) {
         const dateKey = getDateKey((metric as MetricCommon).date);
-        if (!byDate.has(dateKey)) {
-          byDate.set(dateKey, {});
+        let dateMetrics = byDate.get(dateKey);
+        if (!dateMetrics) {
+          dateMetrics = {};
+          byDate.set(dateKey, dateMetrics);
         }
-        const dateMetrics = byDate.get(dateKey)!;
-        if (!dateMetrics[metricType]) {
-          dateMetrics[metricType] = [];
-        }
+        dateMetrics[metricType] ??= [];
         dateMetrics[metricType].push(metric);
       }
     }
@@ -91,70 +70,25 @@ export class FileStorage {
         const result = await this.saveAllMetricsToFile(typeMetrics, filePath, dateKey);
         totalSaved += result.saved;
         totalUpdated += result.updated;
-      } catch (err) {
-        logger.error('Failed to save metrics to file', err, { dateKey });
-        errors.push(`${dateKey}: ${(err as Error).message}`);
+      } catch (error) {
+        logger.error('Failed to save metrics to file', error, { dateKey });
+        errors.push(`${dateKey}: ${(error as Error).message}`);
       }
     }
 
     logger.debug('All metrics saved to storage', {
-      saved: totalSaved,
-      updated: totalUpdated,
       filesWritten: byDate.size,
       metricTypes: Object.keys(metricsByType).length,
+      saved: totalSaved,
+      updated: totalUpdated,
     });
 
     return {
-      success: errors.length === 0,
-      saved: totalSaved,
-      updated: totalUpdated,
       errors: errors.length > 0 ? errors : undefined,
+      saved: totalSaved,
+      success: errors.length === 0,
+      updated: totalUpdated,
     };
-  }
-
-  private async saveAllMetricsToFile(
-    typeMetrics: Record<string, Metric[]>,
-    filePath: string,
-    dateKey: string,
-  ): Promise<{ saved: number; updated: number }> {
-    // Use file locking to prevent race conditions on concurrent writes
-    return withLock(filePath, async () => {
-      const content = await readJsonFile<MetricDailyFile>(filePath, {
-        version: 1,
-        date: dateKey,
-        metrics: {},
-      });
-
-      let saved = 0;
-      let updated = 0;
-
-      for (const [metricType, metrics] of Object.entries(typeMetrics)) {
-        content.metrics[metricType] = content.metrics[metricType] || [];
-
-        // Build lookup map for O(1) deduplication
-        const existingMap = new Map<string, number>();
-        content.metrics[metricType]!.forEach((m: Metric, i: number) => {
-          existingMap.set(this.getMetricKey(m), i);
-        });
-
-        for (const metric of metrics) {
-          const key = this.getMetricKey(metric);
-          const existingIndex = existingMap.get(key);
-
-          if (existingIndex !== undefined) {
-            content.metrics[metricType]![existingIndex] = metric;
-            updated++;
-          } else {
-            content.metrics[metricType]!.push(metric);
-            existingMap.set(key, content.metrics[metricType]!.length - 1);
-            saved++;
-          }
-        }
-      }
-
-      await atomicWrite(filePath, content);
-      return { saved, updated };
-    });
   }
 
   /**
@@ -163,13 +97,13 @@ export class FileStorage {
    * NOTE: Use saveAllMetrics() when saving multiple types to avoid race conditions.
    */
   async saveMetrics(metricType: MetricName, metrics: Metric[]): Promise<SaveResult> {
-    if (!metrics || metrics.length === 0) {
-      return { success: true, saved: 0, updated: 0 };
+    if (metrics.length === 0) {
+      return { saved: 0, success: true, updated: 0 };
     }
 
     logger.debug('Saving metrics to storage', {
-      metricType,
       count: metrics.length,
+      metricType,
     });
 
     // Group metrics by date
@@ -177,10 +111,12 @@ export class FileStorage {
 
     for (const metric of metrics) {
       const dateKey = getDateKey((metric as MetricCommon).date);
-      if (!byDate.has(dateKey)) {
-        byDate.set(dateKey, []);
+      let dateMetrics = byDate.get(dateKey);
+      if (!dateMetrics) {
+        dateMetrics = [];
+        byDate.set(dateKey, dateMetrics);
       }
-      byDate.get(dateKey)!.push(metric);
+      dateMetrics.push(metric);
     }
 
     let totalSaved = 0;
@@ -196,81 +132,37 @@ export class FileStorage {
         const result = await this.saveMetricsToFile(metricType, dateMetrics, filePath, dateKey);
         totalSaved += result.saved;
         totalUpdated += result.updated;
-      } catch (err) {
-        logger.error('Failed to save metrics to file', err, { dateKey, metricType });
-        errors.push(`${dateKey}: ${(err as Error).message}`);
+      } catch (error) {
+        logger.error('Failed to save metrics to file', error, { dateKey, metricType });
+        errors.push(`${dateKey}: ${(error as Error).message}`);
       }
     }
 
     logger.debug('Metrics saved to storage', {
+      filesWritten: byDate.size,
+      hasErrors: errors.length > 0,
       metricType,
       saved: totalSaved,
       updated: totalUpdated,
-      filesWritten: byDate.size,
-      hasErrors: errors.length > 0,
     });
 
     return {
-      success: errors.length === 0,
-      saved: totalSaved,
-      updated: totalUpdated,
       errors: errors.length > 0 ? errors : undefined,
+      saved: totalSaved,
+      success: errors.length === 0,
+      updated: totalUpdated,
     };
   }
 
-  private async saveMetricsToFile(
-    metricType: MetricName,
-    metrics: Metric[],
-    filePath: string,
-    dateKey: string,
-  ): Promise<{ saved: number; updated: number }> {
-    // Use file locking to prevent race conditions on concurrent writes
-    return withLock(filePath, async () => {
-      const content = await readJsonFile<MetricDailyFile>(filePath, {
-        version: 1,
-        date: dateKey,
-        metrics: {},
-      });
-
-      content.metrics[metricType] = content.metrics[metricType] || [];
-
-      // Build lookup map for O(1) deduplication
-      const existingMap = new Map<string, number>();
-      content.metrics[metricType]!.forEach((m: Metric, i: number) => {
-        existingMap.set(this.getMetricKey(m), i);
-      });
-
-      let saved = 0;
-      let updated = 0;
-
-      for (const metric of metrics) {
-        const key = this.getMetricKey(metric);
-        const existingIndex = existingMap.get(key);
-
-        if (existingIndex !== undefined) {
-          content.metrics[metricType]![existingIndex] = metric;
-          updated++;
-        } else {
-          content.metrics[metricType]!.push(metric);
-          existingMap.set(key, content.metrics[metricType]!.length - 1);
-          saved++;
-        }
-      }
-
-      await atomicWrite(filePath, content);
-      return { saved, updated };
-    });
-  }
-
-  // === WORKOUTS ===
+  // === METRICS ===
 
   /**
    * Save workouts to storage.
    * Groups workouts by start date and performs read-merge-write for each day.
    */
   async saveWorkouts(workouts: WorkoutData[]): Promise<SaveResult> {
-    if (!workouts || workouts.length === 0) {
-      return { success: true, saved: 0, updated: 0 };
+    if (workouts.length === 0) {
+      return { saved: 0, success: true, updated: 0 };
     }
 
     logger.debug('Saving workouts to storage', { count: workouts.length });
@@ -280,10 +172,12 @@ export class FileStorage {
 
     for (const workout of workouts) {
       const dateKey = getDateKey(workout.start);
-      if (!byDate.has(dateKey)) {
-        byDate.set(dateKey, []);
+      let dateWorkouts = byDate.get(dateKey);
+      if (!dateWorkouts) {
+        dateWorkouts = [];
+        byDate.set(dateKey, dateWorkouts);
       }
-      byDate.get(dateKey)!.push(workout);
+      dateWorkouts.push(workout);
     }
 
     let totalSaved = 0;
@@ -299,25 +193,134 @@ export class FileStorage {
         const result = await this.saveWorkoutsToFile(dateWorkouts, filePath, dateKey);
         totalSaved += result.saved;
         totalUpdated += result.updated;
-      } catch (err) {
-        logger.error('Failed to save workouts to file', err, { dateKey });
-        errors.push(`${dateKey}: ${(err as Error).message}`);
+      } catch (error) {
+        logger.error('Failed to save workouts to file', error, { dateKey });
+        errors.push(`${dateKey}: ${(error as Error).message}`);
       }
     }
 
     logger.debug('Workouts saved to storage', {
-      saved: totalSaved,
-      updated: totalUpdated,
       filesWritten: byDate.size,
       hasErrors: errors.length > 0,
+      saved: totalSaved,
+      updated: totalUpdated,
     });
 
     return {
-      success: errors.length === 0,
-      saved: totalSaved,
-      updated: totalUpdated,
       errors: errors.length > 0 ? errors : undefined,
+      saved: totalSaved,
+      success: errors.length === 0,
+      updated: totalUpdated,
     };
+  }
+
+  /**
+   * Create a deduplication key for a metric.
+   * Uses date ISO string + source to match MongoDB's unique index.
+   */
+  private getMetricKey(metric: Metric & MetricCommon): string {
+    const date = new Date(metric.date).toISOString();
+    const source = metric.source ?? '';
+    return `${date}|${source}`;
+  }
+
+  private getMetricsFilePath(date: Date): string {
+    return getFilePath(path.join(this.dataDirectory, 'metrics'), date);
+  }
+
+  private getWorkoutsFilePath(date: Date): string {
+    return getFilePath(path.join(this.dataDirectory, 'workouts'), date);
+  }
+
+  private async saveAllMetricsToFile(
+    typeMetrics: Record<string, Metric[]>,
+    filePath: string,
+    dateKey: string,
+  ): Promise<{ saved: number; updated: number }> {
+    // Use file locking to prevent race conditions on concurrent writes
+    return withLock(filePath, async () => {
+      const content = await readJsonFile<MetricDailyFile>(filePath, {
+        date: dateKey,
+        metrics: {},
+        version: 1,
+      });
+
+      let saved = 0;
+      let updated = 0;
+
+      for (const [metricType, metrics] of Object.entries(typeMetrics)) {
+        content.metrics[metricType] ??= [];
+
+        // Build lookup map for O(1) deduplication
+        const existingMap = new Map<string, number>();
+        for (const [index, m] of content.metrics[metricType].entries()) {
+          existingMap.set(this.getMetricKey(m), index);
+        }
+
+        for (const metric of metrics) {
+          const key = this.getMetricKey(metric);
+          const existingIndex = existingMap.get(key);
+
+          if (existingIndex === undefined) {
+            content.metrics[metricType].push(metric);
+            existingMap.set(key, content.metrics[metricType].length - 1);
+            saved++;
+          } else {
+            content.metrics[metricType][existingIndex] = metric;
+            updated++;
+          }
+        }
+      }
+
+      await atomicWrite(filePath, content);
+      return { saved, updated };
+    });
+  }
+
+  // === WORKOUTS ===
+
+  private async saveMetricsToFile(
+    metricType: MetricName,
+    metrics: Metric[],
+    filePath: string,
+    dateKey: string,
+  ): Promise<{ saved: number; updated: number }> {
+    // Use file locking to prevent race conditions on concurrent writes
+    return withLock(filePath, async () => {
+      const content = await readJsonFile<MetricDailyFile>(filePath, {
+        date: dateKey,
+        metrics: {},
+        version: 1,
+      });
+
+      content.metrics[metricType] ??= [];
+
+      // Build lookup map for O(1) deduplication
+      const existingMap = new Map<string, number>();
+      for (const [index, m] of content.metrics[metricType].entries()) {
+        existingMap.set(this.getMetricKey(m), index);
+      }
+
+      let saved = 0;
+      let updated = 0;
+
+      for (const metric of metrics) {
+        const key = this.getMetricKey(metric);
+        const existingIndex = existingMap.get(key);
+
+        if (existingIndex === undefined) {
+          content.metrics[metricType].push(metric);
+          existingMap.set(key, content.metrics[metricType].length - 1);
+          saved++;
+        } else {
+          content.metrics[metricType][existingIndex] = metric;
+          updated++;
+        }
+      }
+
+      await atomicWrite(filePath, content);
+      return { saved, updated };
+    });
   }
 
   private async saveWorkoutsToFile(
@@ -328,10 +331,10 @@ export class FileStorage {
     // Use file locking to prevent race conditions on concurrent writes
     return withLock(filePath, async () => {
       const content = await readJsonFile<WorkoutDailyFile>(filePath, {
-        version: 1,
         date: dateKey,
-        workouts: {},
         routes: {},
+        version: 1,
+        workouts: {},
       });
 
       let saved = 0;
@@ -339,7 +342,7 @@ export class FileStorage {
 
       for (const workout of workouts) {
         // Check if updating or inserting
-        if (content.workouts[workout.id]) {
+        if (workout.id in content.workouts) {
           updated++;
         } else {
           saved++;

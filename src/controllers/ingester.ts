@@ -1,10 +1,10 @@
 import { Request, Response } from 'express';
 
-import { saveMetrics } from './metrics';
-import { saveWorkouts } from './workouts';
 import { IngestData } from '../models/IngestData';
 import { IngestResponse } from '../models/IngestResponse';
 import { IngestDataSchema } from '../validation/schemas';
+import { saveMetrics } from './metrics';
+import { saveWorkouts } from './workouts';
 
 export const ingestData = async (req: Request, res: Response) => {
   const { log } = req;
@@ -17,8 +17,8 @@ export const ingestData = async (req: Request, res: Response) => {
     if (!parseResult.success) {
       log.warn('Invalid request body', { errors: parseResult.error.issues });
       res.status(400).json({
-        error: 'Invalid request format',
         details: parseResult.error.issues,
+        error: 'Invalid request format',
       });
       return;
     }
@@ -26,10 +26,10 @@ export const ingestData = async (req: Request, res: Response) => {
     const data = parseResult.data as IngestData;
 
     log.info('Processing ingestion request', {
-      hasMetrics: !!data.data?.metrics?.length,
-      metricsCount: data.data?.metrics?.length || 0,
-      hasWorkouts: !!data.data?.workouts?.length,
-      workoutsCount: data.data?.workouts?.length || 0,
+      hasMetrics: (data.data.metrics?.length ?? 0) > 0,
+      hasWorkouts: (data.data.workouts?.length ?? 0) > 0,
+      metricsCount: data.data.metrics?.length ?? 0,
+      workoutsCount: data.data.workouts?.length ?? 0,
     });
 
     // Use Promise.allSettled for fault tolerance - one failure doesn't stop the other
@@ -39,24 +39,29 @@ export const ingestData = async (req: Request, res: Response) => {
     if (metricsResult.status === 'fulfilled') {
       response = { ...response, ...metricsResult.value };
     } else {
-      log.error('Metrics save failed', metricsResult.reason);
+      const reason = metricsResult.reason as Error | undefined;
+      log.error('Metrics save failed', reason);
       response.metrics = {
+        error: reason?.message ?? 'Unknown error',
         success: false,
-        error: metricsResult.reason?.message || 'Unknown error',
       };
     }
     if (workoutsResult.status === 'fulfilled') {
       response = { ...response, ...workoutsResult.value };
     } else {
-      log.error('Workouts save failed', workoutsResult.reason);
+      const reason = workoutsResult.reason as Error | undefined;
+      log.error('Workouts save failed', reason);
       response.workouts = {
+        error: reason?.message ?? 'Unknown error',
         success: false,
-        error: workoutsResult.reason?.message || 'Unknown error',
       };
     }
 
-    const hasErrors = Object.values(response).some((r) => !r.success);
-    const allFailed = Object.values(response).every((r) => !r.success);
+    const responseValues = [response.metrics, response.workouts].filter(
+      (r): r is NonNullable<typeof r> => r !== undefined,
+    );
+    const hasErrors = responseValues.some((r) => !r.success);
+    const allFailed = responseValues.every((r) => !r.success);
 
     if (allFailed) {
       timer.end('error', 'Ingestion completely failed', { response });
