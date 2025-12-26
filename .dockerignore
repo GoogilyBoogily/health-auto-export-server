@@ -1,0 +1,12 @@
+node_modules
+.git
+.env
+.env.*
+*.log
+.DS_Store
+*.md
+.eslintrc*
+.prettierrc*
+.nvmrc
+yarn.lock
+bun.lockb.tmp*

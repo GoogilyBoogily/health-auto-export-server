@@ -1,0 +1,16 @@
+services:
+  hae-server:
+    container_name: hae-server
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=${NODE_ENV}
+      - DATA_DIR=/data
+      - READ_TOKEN=${READ_TOKEN}
+      - WRITE_TOKEN=${WRITE_TOKEN}
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

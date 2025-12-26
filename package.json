@@ -1,0 +1,37 @@
+{
+  "name": "health-auto-export-server",
+  "version": "0.0.1",
+  "license": "MIT",
+  "main": "src/app.ts",
+  "scripts": {
+    "start": "bun run src/app.ts",
+    "dev": "bun --watch run src/app.ts",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"src/**/*.ts\""
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.0.1",
+    "express-rate-limit": "^7.5.0",
+    "zod": "^4.2.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.2",
+    "@types/bun": "latest",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "eslint": "9.39.2",
+    "eslint-config-prettier": "^10.0.1",
+    "eslint-plugin-n": "17.23.1",
+    "eslint-plugin-perfectionist": "5.1.0",
+    "eslint-plugin-prettier": "^5.2.1",
+    "eslint-plugin-promise": "7.2.1",
+    "eslint-plugin-regexp": "2.10.0",
+    "eslint-plugin-sonarjs": "3.0.5",
+    "eslint-plugin-unicorn": "62.0.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "8.50.1"
+  }
+}
