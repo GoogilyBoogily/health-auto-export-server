@@ -1,60 +1,105 @@
-# Health Auto Export Server
+# Health Auto Export Server (File-Based)
 
-A lightweight Express.js/TypeScript server for ingesting Apple Health data from the [Health Auto Export](https://apple.co/3iqbU2d) iOS app. Data is stored as JSON files organized by date.
+**A write-only, file-based health data ingestion server for Apple Health.**
+
+No database required. Just JSON files you own completely.
+
+---
+
+## Overview
+
+This project provides a lightweight, self-hosted server for ingesting Apple Health data exported via the [Health Auto Export](https://www.healthexportapp.com/) iOS app. Unlike traditional approaches that require database setup and visualization stacks, this variant stores data as plain JSON files organized by date, giving you complete ownership and portability of your health data.
+
+**Key Philosophy:** Write once, own forever.
+
+---
 
 ## Features
 
-- File-based JSON storage (no database required)
-- Atomic writes prevent data corruption
-- Automatic deduplication of metrics
-- UTC-consistent date handling
-- Correlation ID logging for request tracing
+- **File-Based Storage** - No database required. Data stored as JSON in `YYYY/MM/YYYY-MM-DD.json` structure
+- **Write-Only API** - Single-purpose ingestion endpoint, no read complexity
+- **Bun Runtime** - Fast startup and execution with modern JavaScript runtime
+- **Atomic Writes** - Temp file + rename pattern prevents data corruption
+- **File Locking** - Concurrent write protection with automatic stale lock detection
+- **Deduplication** - Metrics keyed by `date|source` to prevent duplicates
+- **Zod Validation** - Type-safe request validation
+- **Graceful Shutdown** - Clean server termination with in-flight request handling
+- **Docker Ready** - Production-ready containerization with health checks
+- **100+ Health Metrics** - Comprehensive Apple Health metric support
 
-## Requirements
+---
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (recommended), or
-- [Bun](https://bun.sh/) runtime (for local development)
+## Supported Health Metrics
+
+| Category | Examples |
+|----------|----------|
+| **Activity** | Steps, active energy, exercise time, stand hours, flights climbed |
+| **Heart & Vitals** | Heart rate, HRV, resting heart rate, blood pressure, blood oxygen |
+| **Body** | Weight, height, body fat percentage, BMI, lean body mass |
+| **Sleep** | Sleep analysis, time asleep, time in bed, sleep stages |
+| **Nutrition** | Calories, macros (protein, carbs, fat), vitamins, minerals, water |
+| **Respiratory** | Respiratory rate, VO2 max, forced vital capacity |
+| **Mobility** | Walking speed, step length, walking asymmetry, stair speed |
+| **Workouts** | All workout types with GPS routes, heart rate zones, and metadata |
+| **Cycling** | Distance, speed, cadence, power |
+| **Running** | Ground contact time, stride length, vertical oscillation |
+| **Other** | Mindful minutes, handwashing, environmental audio, UV exposure |
+
+See [`src/models/MetricName.ts`](src/models/MetricName.ts) for the complete list.
+
+---
 
 ## Quick Start
 
-### 1. Clone and Configure
+### Prerequisites
+
+- [Bun](https://bun.sh/) v1.0+ (for local development)
+- Docker and Docker Compose (for containerized deployment)
+
+### Option 1: Docker (Recommended)
 
 ```bash
-git clone https://github.com/HealthyApps/health-auto-export-server.git
+# Clone the repository
+git clone https://github.com/your-username/health-auto-export-server.git
 cd health-auto-export-server
 
-# Generate secure tokens
-sh ./create-env.sh
-```
+# Generate environment configuration
+./create-env.sh
 
-Or create `.env` manually:
-
-```env
-NODE_ENV=production
-DATA_DIR=./data
-WRITE_TOKEN=sk-your-secure-token-here
-```
-
-### 2. Start the Server
-
-**Using Docker (recommended):**
-
-```bash
+# Start the server
 docker compose up -d
+
+# View logs
+docker compose logs -f hae-server
 ```
 
-**Using Bun (local development):**
+### Option 2: Local Development
 
 ```bash
+# Clone the repository
+git clone https://github.com/your-username/health-auto-export-server.git
+cd health-auto-export-server
+
+# Install dependencies
 bun install
+
+# Generate environment configuration
+./create-env.sh
+
+# Start development server (with hot reload)
 bun dev
+
+# Or start production server
+bun start
 ```
 
-The server runs on port `3001`.
+The server runs on **port 3001** by default.
 
-### 3. Configure Health Auto Export App
+---
 
-1. Install [Health Auto Export](https://apple.co/3iqbU2d) on your iPhone
+## Configure Health Auto Export App
+
+1. Install [Health Auto Export](https://www.healthexportapp.com/) on your iPhone
 2. Navigate to **Automations** tab
 3. Create a new automation:
    - **Type:** REST API
@@ -65,41 +110,83 @@ The server runs on port `3001`.
    - **Batch Requests:** Enabled
 4. Use **Manual Export** to test the connection
 
+---
+
+## Configuration
+
+### Environment Variables
+
+Create a `.env` file or run `./create-env.sh` to generate one:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `WRITE_TOKEN` | Yes | - | API authentication token (must start with `sk-`) |
+| `NODE_ENV` | No | `development` | Environment mode (`development` or `production`) |
+| `DATA_DIR` | No | `./data` | Directory for storing JSON data files |
+| `PORT` | No | `3001` | Server port |
+| `LOG_LEVEL` | No | `debug` | Log level (debug/info/warn/error) |
+
+### Token Generation
+
+```bash
+# Automatically generates a secure token
+./create-env.sh
+```
+
+---
+
 ## API Reference
 
-### POST /api/data
+### Ingest Data
 
-Ingest health metrics and/or workouts.
+```
+POST /api/data
+```
+
+Ingests metrics and workouts from Health Auto Export app.
 
 **Headers:**
-- `api-key`: Your write token (must start with `sk-`)
-- `Content-Type`: `application/json`
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `api-key` | Yes | Your `WRITE_TOKEN` value |
+| `Content-Type` | Yes | `application/json` |
 
 **Response Codes:**
-- `200`: All data saved successfully
-- `207`: Partial success (some data failed)
-- `400`: Invalid request format
-- `401`: Unauthorized (invalid token)
-- `500`: Server error
 
-### GET /health
+- `200` - All data saved successfully
+- `207` - Partial success (some data failed)
+- `400` - Invalid request format
+- `401` - Unauthorized (invalid token)
+- `500` - Server error
 
-Health check endpoint (no authentication required).
+### Health Check
 
-## Data Storage
+```
+GET /health
+```
 
-Data is stored as JSON files organized by date:
+Returns `OK` with status 200 if the server is running. No authentication required.
+
+---
+
+## Data Storage Structure
+
+Data is organized by type and date:
 
 ```
 data/
 ├── metrics/
-│   └── 2024/
+│   └── 2025/
 │       └── 01/
-│           └── 2024-01-15.json
+│           ├── 2025-01-01.json
+│           ├── 2025-01-02.json
+│           └── ...
 └── workouts/
-    └── 2024/
+    └── 2025/
         └── 01/
-            └── 2024-01-15.json
+            ├── 2025-01-01.json
+            └── ...
 ```
 
 ### Deduplication
@@ -107,72 +194,108 @@ data/
 - **Metrics:** Deduplicated by `date + source`
 - **Workouts:** Deduplicated by `workoutId`
 
+---
+
+## Project Structure
+
+```
+.
+├── src/
+│   ├── app.ts              # Express entry point
+│   ├── controllers/        # Request handlers
+│   │   ├── ingester.ts     # Main ingestion orchestrator
+│   │   ├── metrics.ts      # Metrics processing
+│   │   └── workouts.ts     # Workout processing
+│   ├── middleware/         # Express middleware
+│   │   ├── auth.ts         # Token authentication
+│   │   └── requestLogger.ts
+│   ├── models/             # TypeScript types
+│   │   ├── Metric.ts
+│   │   ├── MetricName.ts   # 100+ metric enums
+│   │   └── Workout.ts
+│   ├── routes/             # API route definitions
+│   ├── storage/            # File persistence layer
+│   ├── utils/
+│   │   └── logger.ts
+│   └── validation/         # Zod schemas
+├── data/                   # Health data (gitignored)
+├── docker-compose.yaml
+├── Dockerfile
+├── package.json
+└── create-env.sh
+```
+
+---
+
 ## Development
 
 ```bash
 # Install dependencies
 bun install
 
-# Start dev server (hot reload)
+# Start with hot reload
 bun dev
 
 # Lint code
 bun lint
+
+# Fix lint issues
 bun lint:fix
 
 # Format code
 bun format
 ```
 
-## Docker Commands
+### Docker Commands
 
 ```bash
-docker compose up -d          # Start
-docker compose down           # Stop
-docker compose logs -f hae-server  # View logs
-docker compose restart hae-server  # Restart
+docker compose up -d              # Start
+docker compose down               # Stop
+docker compose logs -f hae-server # View logs
+docker compose restart hae-server # Restart
 ```
 
-## Environment Variables
+---
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `NODE_ENV` | No | `development` | Environment mode |
-| `DATA_DIR` | No | `./data` | Data storage directory |
-| `WRITE_TOKEN` | Yes | - | API authentication token (must start with `sk-`) |
-| `PORT` | No | `3001` | Server port |
-| `LOG_LEVEL` | No | `debug` | Log level (debug/info/warn/error) |
+## Use Cases
 
-## Supported Metrics
+- **Personal Health Archive** - Store years of health data in portable JSON format
+- **Custom Analytics** - Build your own dashboards and analysis tools
+- **Data Ownership** - Keep health data on your own infrastructure
+- **Research** - Export and analyze data with any tool that reads JSON
+- **Backup** - Simple file-based backup with any standard backup solution
 
-See [`src/models/MetricName.ts`](src/models/MetricName.ts) for the full list of supported health metrics.
+---
 
-## Troubleshooting
+## Tech Stack
 
-**Connection refused:**
-- Ensure the server is running (`docker compose ps`)
-- Check your firewall allows port 3001
-- Verify your computer's IP address
+| Component | Technology |
+|-----------|------------|
+| Runtime | [Bun](https://bun.sh/) |
+| Framework | [Express.js](https://expressjs.com/) 5.x |
+| Language | [TypeScript](https://www.typescriptlang.org/) 5.7 |
+| Validation | [Zod](https://zod.dev/) |
+| Container | Docker with Alpine Linux |
 
-**401 Unauthorized:**
-- Verify the `api-key` header matches `WRITE_TOKEN` in `.env`
-- Token must start with `sk-`
+---
 
-**View logs:**
-```bash
-docker compose logs -f hae-server
-```
+## Acknowledgments
 
-## Support
+This project is a specialized fork of [health-auto-export-server](https://github.com/HealthyApps/health-auto-export-server) by HealthyApps.
 
-- [Open an issue](https://github.com/HealthyApps/health-auto-export-server/issues)
-- [Discord server](https://discord.gg/PY7urEVDnj)
-- [Contact support](https://healthyapps.dev/contact)
+The original project provides a complete visualization stack with MongoDB storage and Grafana dashboards, designed to be beginner-friendly with GUI-based data exploration.
 
-## Contributing
+This fork takes a different approach:
 
-Contributions welcome! Please open a pull request with your changes.
+- **File-based JSON storage** instead of MongoDB
+- **Write-only API** without the visualization layer
+- **Bun runtime** instead of Node.js
+- **Focus on data ownership** and portability
+
+Thank you to the original authors for creating the foundation that made this variant possible.
+
+---
 
 ## License
 
-MIT
+MIT - See [LICENSE](LICENSE) for details.

@@ -1,6 +1,6 @@
 {
   "name": "health-auto-export-server",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "license": "MIT",
   "main": "src/app.ts",
   "scripts": {
@@ -13,7 +13,6 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^5.0.1",
-    "express-rate-limit": "^7.5.0",
     "zod": "^4.2.1"
   },
   "devDependencies": {

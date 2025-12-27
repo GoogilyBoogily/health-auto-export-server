@@ -2,7 +2,6 @@ import { Server } from 'node:http';
 
 import cors from 'cors';
 import express from 'express';
-import rateLimit from 'express-rate-limit';
 
 import { requireWriteAuth } from './middleware/auth';
 import { requestLogger } from './middleware/requestLogger';
@@ -35,15 +34,6 @@ const corsOptions = {
   origin: '*',
 };
 
-// Rate limiter: 100 requests per minute per IP
-const apiLimiter = rateLimit({
-  legacyHeaders: false,
-  max: 100,
-  message: { error: 'Too many requests, please try again later' },
-  standardHeaders: true,
-  windowMs: 60 * 1000, // 1 minute
-});
-
 // eslint-disable-next-line sonarjs/cors -- CORS is intentionally enabled for API access
 app.use(cors(corsOptions));
 
@@ -54,8 +44,8 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // Add request logging middleware (before auth and routes)
 app.use(requestLogger);
 
-// Apply rate limiting and write auth middleware to data ingestion routes
-app.use('/api/data', apiLimiter, requireWriteAuth, ingesterRouter);
+// Apply write auth middleware to data ingestion routes
+app.use('/api/data', requireWriteAuth, ingesterRouter);
 
 // Health check endpoint
 app.get('/health', (_req: express.Request, res: express.Response) => {
