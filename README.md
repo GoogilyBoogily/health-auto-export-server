@@ -1,14 +1,12 @@
-# Health Auto Export Server (File-Based)
+# Health Auto Export Server
 
 **A write-only, file-based health data ingestion server for Apple Health.**
-
-No database required. Just JSON files you own completely.
 
 ---
 
 ## Overview
 
-This project provides a lightweight, self-hosted server for ingesting Apple Health data exported via the [Health Auto Export](https://www.healthexportapp.com/) iOS app. Unlike traditional approaches that require database setup and visualization stacks, this variant stores data as plain JSON files organized by date, giving you complete ownership and portability of your health data.
+This project provides a lightweight, self-hosted server for ingesting Apple Health data exported via the [Health Auto Export](https://www.healthexportapp.com/) iOS app. Data is stored as plain JSON files organized by date, giving you complete ownership and portability of your health data.
 
 **Key Philosophy:** Write once, own forever.
 
@@ -16,8 +14,8 @@ This project provides a lightweight, self-hosted server for ingesting Apple Heal
 
 ## Features
 
-- **File-Based Storage** - No database required. Data stored as JSON in `YYYY/MM/YYYY-MM-DD.json` structure
-- **Write-Only API** - Single-purpose ingestion endpoint, no read complexity
+- **File-Based Storage** - Data stored as JSON in `YYYY/MM/YYYY-MM-DD.json` structure
+- **Write-Only API** - Single-purpose ingestion endpoint
 - **Bun Runtime** - Fast startup and execution with modern JavaScript runtime
 - **Atomic Writes** - Temp file + rename pattern prevents data corruption
 - **File Locking** - Concurrent write protection with automatic stale lock detection
@@ -281,18 +279,14 @@ docker compose restart hae-server # Restart
 
 ## Acknowledgments
 
-This project is a specialized fork of [health-auto-export-server](https://github.com/HealthyApps/health-auto-export-server) by HealthyApps.
+This project is a specialized fork of [health-auto-export-server](https://github.com/HealthyApps/health-auto-export-server) by HealthyApps. Thank you to the original authors for creating the foundation that made this variant possible.
 
-The original project provides a complete visualization stack with MongoDB storage and Grafana dashboards, designed to be beginner-friendly with GUI-based data exploration.
+This variant focuses on:
 
-This fork takes a different approach:
-
-- **File-based JSON storage** instead of MongoDB
-- **Write-only API** without the visualization layer
-- **Bun runtime** instead of Node.js
-- **Focus on data ownership** and portability
-
-Thank you to the original authors for creating the foundation that made this variant possible.
+- **File-based JSON storage** for data portability
+- **Write-only API** for simple ingestion
+- **Bun runtime** for fast execution
+- **Data ownership** and self-hosting
 
 ---
 

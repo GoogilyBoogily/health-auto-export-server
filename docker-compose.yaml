@@ -1,6 +1,6 @@
 services:
   hae-server:
-    container_name: hae-server
+    container_name: health-auto-export-server
     build:
       context: .
       dockerfile: Dockerfile

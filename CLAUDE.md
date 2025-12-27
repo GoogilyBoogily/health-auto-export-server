@@ -2,76 +2,87 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Build & Development Commands
-
-All commands run from project root:
+## Commands
 
 ```bash
-# Development (hot reload)
-bun dev
+# Development
+bun install          # Install dependencies
+bun dev              # Start dev server with hot reload
+bun start            # Production server
 
-# Start production server
-bun start
+# Code quality
+bun lint             # Check for lint violations
+bun lint:fix         # Auto-fix lint issues
+bun format           # Format with prettier
 
-# Linting
-bun lint
-bun lint:fix
-
-# Formatting
-bun format
-```
-
-Docker (from project root):
-```bash
-docker compose up -d      # Start services
-docker compose down       # Stop services
-docker compose logs -f hae-server  # View logs
+# Docker
+docker compose up -d              # Start containerized
+docker compose logs -f hae-server # View logs
+docker compose down               # Stop
 ```
 
 ## Architecture
 
-Express.js/TypeScript backend for ingesting Apple Health data (write-only).
+**Health Auto Export Server** - A write-only, file-based health data ingestion server for Apple Health data exported via the Health Auto Export iOS app.
 
-**Request Flow:** Routes → Controllers → Storage (file-based JSON)
+**Tech Stack:** Bun runtime, Express.js 5.x, TypeScript 5.7 (strict), Zod validation
 
-**Storage Structure:**
-- `data/metrics/YYYY/MM/YYYY-MM-DD.json` - Daily metric files
-- `data/workouts/YYYY/MM/YYYY-MM-DD.json` - Daily workout files
-
-**API Endpoints:**
-- `POST /api/data` - Ingest metrics/workouts (requires WRITE_TOKEN)
-- `GET /health` - Health check endpoint (no auth)
-
-**Authentication:** Token-based via `api-key` header. Tokens must start with `sk-`.
-
-## Key Directories
+### Request Flow
 
 ```
-src/
-├── app.ts           # Express entry point (port 3001)
-├── controllers/     # Ingestion business logic
-├── routes/          # Ingestion endpoint definitions
-├── models/          # TypeScript types (Metric, Workout, MetricName enum)
-├── storage/         # FileStorage class for JSON persistence
-├── middleware/      # Write auth, request logging
-├── utils/           # Logger
-└── validation/      # Zod schemas for request validation
+POST /api/data
+  → cors → json parser (50mb) → requestLogger → requireWriteAuth (timing-safe)
+  → ingestData controller
+    → Zod validation (IngestDataSchema)
+    → Promise.allSettled(saveMetrics, saveWorkouts)  # Fault-tolerant
+    → Response: 200 (success), 207 (partial), 500 (failure)
 ```
+
+### Key Directories
+
+- `src/controllers/` - Request handlers (`ingester.ts` orchestrates, `metrics.ts` and `workouts.ts` process)
+- `src/storage/` - File persistence with atomic writes and locking (`FileStorage.ts`, `fileHelpers.ts`)
+- `src/models/` - TypeScript types (`MetricName.ts` has 100+ health metric enums)
+- `src/validation/` - Zod schemas for request validation
+- `src/middleware/` - Auth (`auth.ts`) and logging (`requestLogger.ts`)
+
+### Storage Pattern
+
+Data stored as JSON in date-organized structure:
+```
+data/metrics/YYYY/MM/YYYY-MM-DD.json
+data/workouts/YYYY/MM/YYYY-MM-DD.json
+```
+
+- **Atomic writes:** Temp file + rename prevents corruption
+- **File locking:** `filePath.lock` with 30s stale detection
+- **Deduplication:** Metrics by `date|source`, workouts by `workoutId`
+
+### Logger
+
+`src/utils/logger.ts` - Dual-mode logging:
+- Development: Pretty colored output
+- Production: JSON structured logs
+
+## Code Style
+
+ESLint with strict TypeScript checking and multiple plugins (typescript-eslint, unicorn, sonarjs, perfectionist, regexp, promise, node).
+
+Key rules:
+- No `any` types allowed
+- Underscore-prefixed unused parameters allowed (`argsIgnorePattern: '^_'`)
+- Perfectionist handles import/object/type sorting (natural order)
+- Express abbreviations allowed: `req`, `res`, `err`, `env`, `acc`
+- Filenames: camelCase or PascalCase
 
 ## Environment Variables
 
-Required in `.env`:
+```bash
+WRITE_TOKEN   # Required - API auth token (must start with "sk-")
+NODE_ENV      # Optional - development|production (default: development)
+DATA_DIR      # Optional - Data directory (default: ./data)
+PORT          # Optional - Server port (default: 3001)
+LOG_LEVEL     # Optional - debug|info|warn|error (default: debug)
 ```
-NODE_ENV=production|development
-DATA_DIR=./data
-WRITE_TOKEN=sk-xxx
-```
 
-Generate tokens: `sh ./create-env.sh`
-
-## Important Patterns
-
-- **Atomic writes:** Storage uses temp file + rename to prevent corruption
-- **Deduplication:** Metrics keyed by `ISO_DATE|SOURCE`
-- **Correlation IDs:** All requests tagged with unique ID for log tracing
-- **UTC timestamps:** All dates stored and processed in UTC
+Run `./create-env.sh` to generate a `.env` with a secure token.
