@@ -109,6 +109,22 @@ export async function readJsonFile<T>(filePath: string, defaultValue: T): Promis
 }
 
 /**
+ * Read JSON file, returning undefined if file doesn't exist.
+ * Useful when you need to distinguish between "file doesn't exist" and "file exists but is empty".
+ */
+export async function readJsonFileOptional<T>(filePath: string): Promise<T | undefined> {
+  try {
+    const content = await fs.readFile(filePath, 'utf8');
+    return JSON.parse(content) as T;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/**
  * Release a lock on a file.
  */
 export async function releaseLock(filePath: string): Promise<void> {
