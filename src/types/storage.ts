@@ -1,4 +1,9 @@
-import { Metric } from '../models/Metric';
+/**
+ * Storage layer type definitions.
+ * Types for persisted data structures.
+ */
+
+import type { Metric } from './metric';
 
 export interface MetricDailyFile {
   date: string; // YYYY-MM-DD

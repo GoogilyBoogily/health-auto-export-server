@@ -29,4 +29,3 @@ export { CacheStorage } from './CacheStorage';
 // Backward compatibility alias
 export { CacheStorage as FileStorage } from './CacheStorage';
 export { ObsidianStorage } from './obsidian';
-export * from './types';

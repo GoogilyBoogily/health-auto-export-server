@@ -1,3 +1,6 @@
+/**
+ * Enum of all supported health metric names from Apple Health.
+ */
 export enum MetricName {
   // Activity and Exercise
   ACTIVE_ENERGY = 'active_energy',

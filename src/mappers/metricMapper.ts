@@ -1,53 +1,18 @@
-import { MetricName } from './MetricName';
-
-export interface BaseMetric extends MetricCommon {
-  qty: number;
-  units: string;
-}
-
-export interface BloodPressureMetric extends MetricCommon {
-  diastolic: number;
-  systolic: number;
-  units: string;
-}
-
-export interface HeartRateMetric extends MetricCommon {
-  Avg: number;
-  Max: number;
-  Min: number;
-  units: string;
-}
-
 /**
- * Common fields shared by all metric types.
- * Used for deduplication (date + source) and type-safe access.
+ * Metric data transformation utilities.
+ * Transforms raw metric data from the API into typed metric objects.
  */
-export interface MetricCommon {
-  date: Date;
-  metadata?: Record<string, string>;
-  source?: string;
-}
 
-export interface MetricData {
-  data: Metric[];
-  name: MetricName | string;
-  units: string;
-}
+import { MetricName } from '../types';
 
-export interface SleepMetric extends MetricCommon {
-  awake: number;
-  core: number;
-  deep: number;
-  inBed: number;
-  inBedEnd: Date;
-  inBedStart: Date;
-  rem: number;
-  sleepEnd: Date;
-  sleepStart: Date;
-  units: string;
-  asleep?: number;
-  totalSleep?: number;
-}
+import type {
+  BaseMetric,
+  BloodPressureMetric,
+  HeartRateMetric,
+  Metric,
+  MetricData,
+  SleepMetric,
+} from '../types';
 
 export const mapMetric = (
   metric: MetricData,
@@ -110,5 +75,3 @@ export const mapMetric = (
     }
   }
 };
-
-export type Metric = BaseMetric | BloodPressureMetric | HeartRateMetric | SleepMetric;

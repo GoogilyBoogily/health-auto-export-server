@@ -1,8 +1,8 @@
-import { IngestData } from '../models/IngestData';
-import { IngestResponse } from '../models/IngestResponse';
 import { cacheStorage, getObsidianStorage } from '../storage';
 import { extractDatesFromWorkouts, filterDuplicateWorkouts } from '../utils/deduplication';
 import { Logger } from '../utils/logger';
+
+import type { IngestData, IngestResponse } from '../types';
 
 // === RETRY CONFIGURATION ===
 const MAX_OBSIDIAN_RETRIES = 3;

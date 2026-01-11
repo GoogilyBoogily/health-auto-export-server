@@ -1,7 +1,12 @@
-import { Metric, MetricCommon } from '../models/Metric';
-import { WorkoutData } from '../models/Workout';
 import { getDateKey } from '../storage/fileHelpers';
-import { MetricDailyFile, WorkoutDailyFile } from '../storage/types';
+
+import type {
+  Metric,
+  MetricCommon,
+  MetricDailyFile,
+  WorkoutDailyFile,
+  WorkoutData,
+} from '../types';
 
 /**
  * Build a hash set from cached metrics for O(1) duplicate lookup.

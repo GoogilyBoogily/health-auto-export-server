@@ -1,9 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { Metric, MetricCommon } from '../models/Metric';
-import { MetricName } from '../models/MetricName';
-import { mapRoute, mapWorkoutData, WorkoutData } from '../models/Workout';
+import { mapRoute, mapWorkoutData } from '../mappers';
 import { logger } from '../utils/logger';
 import {
   atomicWrite,
@@ -14,7 +12,18 @@ import {
   readJsonFileOptional,
   withLock,
 } from './fileHelpers';
-import { MetricDailyFile, SaveResult, StoredRoute, StoredWorkout, WorkoutDailyFile } from './types';
+
+import type {
+  Metric,
+  MetricCommon,
+  MetricDailyFile,
+  MetricName,
+  SaveResult,
+  StoredRoute,
+  StoredWorkout,
+  WorkoutDailyFile,
+  WorkoutData,
+} from '../types';
 
 const DEFAULT_RETENTION_DAYS = 7;
 

@@ -25,7 +25,7 @@ docker compose down               # Stop
 
 **Health Auto Export Server** - A write-only, file-based health data ingestion server for Apple Health data exported via the Health Auto Export iOS app.
 
-**Tech Stack:** Bun runtime, Express.js 5.x, TypeScript 5.7 (strict), Zod validation
+**Tech Stack:** Bun runtime, Express.js 5.x, TypeScript 5.7 (strict), Zod 4.x validation
 
 ### Request Flow
 
@@ -41,22 +41,35 @@ POST /api/data
 ### Key Directories
 
 - `src/controllers/` - Request handlers (`ingester.ts` orchestrates, `metrics.ts` and `workouts.ts` process)
-- `src/storage/` - File persistence with atomic writes and locking (`FileStorage.ts`, `fileHelpers.ts`)
+- `src/storage/` - Dual storage system with file locking and atomic writes
+- `src/storage/obsidian/` - Obsidian vault integration with Markdown/YAML frontmatter
 - `src/models/` - TypeScript types (`MetricName.ts` has 100+ health metric enums)
 - `src/validation/` - Zod schemas for request validation
 - `src/middleware/` - Auth (`auth.ts`) and logging (`requestLogger.ts`)
 
-### Storage Pattern
+### Dual Storage System
 
-Data stored as JSON in date-organized structure:
+Data is written to two storage backends simultaneously:
+
+**1. FileStorage (JSON)** - Raw data archive
 ```
 data/metrics/YYYY/MM/YYYY-MM-DD.json
 data/workouts/YYYY/MM/YYYY-MM-DD.json
 ```
 
+**2. ObsidianStorage (Markdown)** - Human-readable tracking files in Obsidian vault
+- Health metrics → `tracking/health/YYYY-MM-DD.md`
+- Sleep data → `tracking/sleep/YYYY-MM-DD.md`
+- Workouts → `tracking/workout/YYYY-MM-DD.md`
+
+Each Markdown file has YAML frontmatter for Obsidian Dataview queries.
+
+### Storage Internals
+
 - **Atomic writes:** Temp file + rename prevents corruption
-- **File locking:** `filePath.lock` with 30s stale detection
+- **File locking:** `filePath.lock` with 30s stale detection (see `fileHelpers.ts:withLock`)
 - **Deduplication:** Metrics by `date|source`, workouts by `workoutId`
+- **Lazy initialization:** ObsidianStorage initialized after env validation
 
 ### Logger
 
@@ -78,11 +91,12 @@ Key rules:
 ## Environment Variables
 
 ```bash
-WRITE_TOKEN   # Required - API auth token (must start with "sk-")
-NODE_ENV      # Optional - development|production (default: development)
-DATA_DIR      # Optional - Data directory (default: ./data)
-PORT          # Optional - Server port (default: 3001)
-LOG_LEVEL     # Optional - debug|info|warn|error (default: debug)
+WRITE_TOKEN          # Required - API auth token (must start with "sk-")
+OBSIDIAN_VAULT_PATH  # Required - Path to Obsidian vault for Markdown output
+NODE_ENV             # Optional - development|production (default: development)
+DATA_DIR             # Optional - Data directory (default: ./data)
+PORT                 # Optional - Server port (default: 3001)
+LOG_LEVEL            # Optional - debug|info|warn|error (default: debug)
 ```
 
 Run `./create-env.sh` to generate a `.env` with a secure token.

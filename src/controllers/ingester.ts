@@ -1,10 +1,10 @@
 import { Request, Response } from 'express';
 
-import { IngestData } from '../models/IngestData';
-import { IngestResponse } from '../models/IngestResponse';
 import { IngestDataSchema } from '../validation/schemas';
 import { saveMetrics } from './metrics';
 import { saveWorkouts } from './workouts';
+
+import type { IngestData, IngestResponse } from '../types';
 
 export const ingestData = async (req: Request, res: Response) => {
   const { log } = req;

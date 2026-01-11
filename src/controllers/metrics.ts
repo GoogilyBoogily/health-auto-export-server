@@ -1,9 +1,9 @@
-import { IngestData } from '../models/IngestData';
-import { IngestResponse } from '../models/IngestResponse';
-import { mapMetric, Metric } from '../models/Metric';
+import { mapMetric } from '../mappers';
 import { cacheStorage, getObsidianStorage } from '../storage';
 import { extractDatesFromMetrics, filterDuplicateMetrics } from '../utils/deduplication';
 import { Logger } from '../utils/logger';
+
+import type { IngestData, IngestResponse, Metric } from '../types';
 
 // === RETRY CONFIGURATION ===
 const MAX_OBSIDIAN_RETRIES = 3;
