@@ -61,8 +61,10 @@ export interface SleepFrontmatter {
   remHours?: number;
   sleepEfficiency?: number; // percentage
   sleepEnd?: string; // HH:MM
+  sleepSegments?: number; // count of sleep stage transitions
   sleepStart?: string; // HH:MM
   source?: string;
+  wristTemp?: number; // wrist temperature in degrees
 }
 
 // ===== COMMON TYPES =====

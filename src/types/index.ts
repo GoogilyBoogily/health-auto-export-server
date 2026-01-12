@@ -15,6 +15,8 @@ export type {
   MetricCommon,
   MetricData,
   SleepMetric,
+  SleepSegmentRaw,
+  SleepStageValue,
 } from './metric';
 
 // Metric name enum

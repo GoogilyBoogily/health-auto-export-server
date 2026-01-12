@@ -12,7 +12,11 @@ import type {
   Metric,
   MetricData,
   SleepMetric,
+  SleepSegmentRaw,
 } from '../types';
+
+// Gap threshold for grouping sleep segments into sessions (in minutes)
+const SESSION_GAP_THRESHOLD_MINUTES = 30;
 
 export const mapMetric = (
   metric: MetricData,
@@ -44,7 +48,15 @@ export const mapMetric = (
       }));
     }
     case MetricName.SLEEP_ANALYSIS: {
-      const sleepData = metric.data as SleepMetric[];
+      const rawData = metric.data as unknown[];
+
+      // Detect format: segment data has 'value' and 'startDate' fields
+      if (isSegmentFormat(rawData)) {
+        return aggregateSegments(rawData as SleepSegmentRaw[], metric.units);
+      }
+
+      // Legacy aggregated format (pre-aggregated totals)
+      const sleepData = rawData as SleepMetric[];
       return sleepData.map((measurement) => ({
         asleep: measurement.asleep,
         awake: measurement.awake,
@@ -75,3 +87,102 @@ export const mapMetric = (
     }
   }
 };
+
+/**
+ * Aggregate sleep segments into sleep sessions.
+ * Groups consecutive segments into sessions based on time gaps,
+ * then calculates totals for each session.
+ */
+function aggregateSegments(segments: SleepSegmentRaw[], units: string): SleepMetric[] {
+  if (segments.length === 0) return [];
+
+  // Sort by start time (toSorted creates a copy, avoiding mutation)
+  const sorted = [...segments].toSorted(
+    (a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime(),
+  );
+
+  // Group into sessions (30 min gap = new session)
+  const sessions = groupIntoSessions(sorted);
+
+  return sessions.map((session: SleepSegmentRaw[]) => {
+    // Sessions are guaranteed non-empty by groupIntoSessions
+    const first = session[0];
+    const last = session.at(-1) ?? first;
+
+    // Aggregate by stage type
+    const totals = { Awake: 0, Core: 0, Deep: 0, REM: 0 };
+    for (const seg of session) {
+      totals[seg.value] += seg.qty;
+    }
+
+    const sleepStart = new Date(first.startDate);
+    const sleepEnd = new Date(last.endDate);
+    const inBedHours = (sleepEnd.getTime() - sleepStart.getTime()) / (1000 * 60 * 60);
+    const asleepHours = totals.Core + totals.Deep + totals.REM;
+
+    return {
+      awake: totals.Awake,
+      core: totals.Core,
+      date: sleepStart,
+      deep: totals.Deep,
+      inBed: inBedHours,
+      inBedEnd: sleepEnd,
+      inBedStart: sleepStart,
+      rem: totals.REM,
+      segmentCount: session.length,
+      sleepEnd,
+      sleepStart,
+      source: first.source,
+      totalSleep: asleepHours,
+      units,
+    };
+  });
+}
+
+/**
+ * Group sleep segments into sessions based on time gaps.
+ * A gap of more than SESSION_GAP_THRESHOLD_MINUTES starts a new session.
+ */
+function groupIntoSessions(segments: SleepSegmentRaw[]): SleepSegmentRaw[][] {
+  const sessions: SleepSegmentRaw[][] = [];
+  let currentSession: SleepSegmentRaw[] = [];
+
+  for (const segment of segments) {
+    if (currentSession.length === 0) {
+      currentSession.push(segment);
+      continue;
+    }
+
+    const lastSegment = currentSession.at(-1);
+    if (!lastSegment) continue;
+    const previousEnd = new Date(lastSegment.endDate);
+    const currentStart = new Date(segment.startDate);
+    const gapMs = currentStart.getTime() - previousEnd.getTime();
+    const gapMins = gapMs / (1000 * 60);
+
+    if (gapMins > SESSION_GAP_THRESHOLD_MINUTES) {
+      // Gap too large, start new session
+      sessions.push(currentSession);
+      currentSession = [segment];
+    } else {
+      currentSession.push(segment);
+    }
+  }
+
+  if (currentSession.length > 0) {
+    sessions.push(currentSession);
+  }
+
+  return sessions;
+}
+
+/**
+ * Check if sleep data is in segment format (individual stage entries).
+ * Segment format has 'value' and 'startDate' fields.
+ * Aggregated format has 'sleepStart', 'core', 'deep', 'rem' fields.
+ */
+function isSegmentFormat(data: unknown[]): boolean {
+  if (data.length === 0) return false;
+  const first = data[0] as Record<string, unknown>;
+  return 'value' in first && 'startDate' in first && 'endDate' in first;
+}

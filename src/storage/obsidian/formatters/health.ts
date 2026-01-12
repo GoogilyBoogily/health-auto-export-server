@@ -4,7 +4,6 @@
  */
 
 /* eslint-disable @typescript-eslint/no-unsafe-enum-comparison -- Comparing string metricType to enum values */
-/* eslint-disable n/no-unsupported-features/es-syntax -- Using Bun runtime which supports .at() */
 
 import { MetricName } from '../../../types';
 import { logger } from '../../../utils/logger';

@@ -52,6 +52,7 @@ export default tseslint.config(
 
       'n/no-unpublished-import': 'off',
 
+      'n/no-unsupported-features/es-syntax': 'off', // Bun supports modern ES features
       'n/no-unsupported-features/node-builtins': 'off', // Bun has different capabilities
       // Perfectionist rule customizations
       'perfectionist/sort-classes': [

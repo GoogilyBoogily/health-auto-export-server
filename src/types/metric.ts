@@ -53,5 +53,23 @@ export interface SleepMetric extends MetricCommon {
   sleepStart: Date;
   units: string;
   asleep?: number;
+  segmentCount?: number;
   totalSleep?: number;
 }
+
+/**
+ * Raw sleep segment from Health Auto Export API.
+ * Each entry represents a single sleep stage transition.
+ */
+export interface SleepSegmentRaw {
+  endDate: string;
+  qty: number;
+  startDate: string;
+  value: 'Awake' | 'Core' | 'Deep' | 'REM';
+  source?: string;
+}
+
+/**
+ * Sleep stage value types from Health Auto Export.
+ */
+export type SleepStageValue = 'Awake' | 'Core' | 'Deep' | 'REM';
