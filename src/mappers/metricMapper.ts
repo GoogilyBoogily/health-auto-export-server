@@ -4,6 +4,8 @@
  */
 
 import { MetricName } from '../types';
+import { debugMetricMapping, debugSleepAggregation, isDebugEnabled } from '../utils/debugLogger';
+import { logger } from '../utils/logger';
 
 import type {
   BaseMetric,
@@ -23,10 +25,12 @@ export const mapMetric = (
 ): (BloodPressureMetric | HeartRateMetric | Metric | SleepMetric)[] => {
   // Cast to MetricName for switch comparison - unknown strings handled by default case
   const metricName = metric.name as MetricName;
+  let result: (BloodPressureMetric | HeartRateMetric | Metric | SleepMetric)[];
+
   switch (metricName) {
     case MetricName.BLOOD_PRESSURE: {
       const bpData = metric.data as BloodPressureMetric[];
-      return bpData.map((measurement) => ({
+      result = bpData.map((measurement) => ({
         date: new Date(measurement.date),
         diastolic: measurement.diastolic,
         metadata: measurement.metadata,
@@ -34,10 +38,11 @@ export const mapMetric = (
         systolic: measurement.systolic,
         units: metric.units,
       }));
+      break;
     }
     case MetricName.HEART_RATE: {
       const hrData = metric.data as HeartRateMetric[];
-      return hrData.map((measurement) => ({
+      result = hrData.map((measurement) => ({
         Avg: measurement.Avg,
         date: new Date(measurement.date),
         Max: measurement.Max,
@@ -46,18 +51,20 @@ export const mapMetric = (
         source: measurement.source,
         units: metric.units,
       }));
+      break;
     }
     case MetricName.SLEEP_ANALYSIS: {
       const rawData = metric.data as unknown[];
 
       // Detect format: segment data has 'value' and 'startDate' fields
       if (isSegmentFormat(rawData)) {
-        return aggregateSegments(rawData as SleepSegmentRaw[], metric.units);
+        result = aggregateSegments(rawData as SleepSegmentRaw[], metric.units);
+        break;
       }
 
       // Legacy aggregated format (pre-aggregated totals)
       const sleepData = rawData as SleepMetric[];
-      return sleepData.map((measurement) => ({
+      result = sleepData.map((measurement) => ({
         asleep: measurement.asleep,
         awake: measurement.awake,
         core: measurement.core,
@@ -74,10 +81,11 @@ export const mapMetric = (
         totalSleep: measurement.totalSleep,
         units: metric.units,
       }));
+      break;
     }
     default: {
       const baseData = metric.data as BaseMetric[];
-      return baseData.map((measurement) => ({
+      result = baseData.map((measurement) => ({
         date: new Date(measurement.date),
         metadata: measurement.metadata,
         qty: measurement.qty,
@@ -86,6 +94,13 @@ export const mapMetric = (
       }));
     }
   }
+
+  // Debug: Log metric mapping transformation
+  if (isDebugEnabled()) {
+    debugMetricMapping(logger, metric.name, metric.data, result);
+  }
+
+  return result;
 };
 
 /**
@@ -104,7 +119,7 @@ function aggregateSegments(segments: SleepSegmentRaw[], units: string): SleepMet
   // Group into sessions (30 min gap = new session)
   const sessions = groupIntoSessions(sorted);
 
-  return sessions.map((session: SleepSegmentRaw[]) => {
+  const result = sessions.map((session: SleepSegmentRaw[]) => {
     // Sessions are guaranteed non-empty by groupIntoSessions
     const first = session[0];
     const last = session.at(-1) ?? first;
@@ -137,6 +152,13 @@ function aggregateSegments(segments: SleepSegmentRaw[], units: string): SleepMet
       units,
     };
   });
+
+  // Debug: Log sleep segment aggregation details
+  if (isDebugEnabled()) {
+    debugSleepAggregation(logger, segments, sessions, result);
+  }
+
+  return result;
 }
 
 /**

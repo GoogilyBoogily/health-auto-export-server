@@ -1,5 +1,6 @@
 import { mapMetric } from '../mappers';
 import { cacheStorage, getObsidianStorage } from '../storage';
+import { debugDedup, debugLog, debugStorage, isDebugEnabled } from '../utils/debugLogger';
 import { extractDatesFromMetrics, filterDuplicateMetrics } from '../utils/deduplication';
 import { Logger } from '../utils/logger';
 
@@ -77,6 +78,7 @@ async function withRetry<T>(
   throw lastError;
 }
 
+/* eslint-disable sonarjs/cognitive-complexity -- Debug logging conditionals add necessary complexity */
 export const saveMetrics = async (
   ingestData: IngestData,
   log?: Logger,
@@ -99,6 +101,14 @@ export const saveMetrics = async (
 
     log?.debug('Processing metrics', { rawMetricsCount: metricsData.length });
 
+    // Debug: Log raw metrics data structure
+    if (log && isDebugEnabled()) {
+      debugLog(log, 'TRANSFORM', 'Raw metrics input', {
+        metricTypes: metricsData.map((m) => ({ dataCount: m.data.length, name: m.name })),
+        totalMetrics: metricsData.length,
+      });
+    }
+
     // Group metrics by type and map the data
     const metricsByType: Record<string, Metric[]> = {};
     for (const metric of metricsData) {
@@ -106,6 +116,16 @@ export const saveMetrics = async (
       const key = metric.name;
       metricsByType[key] ??= [];
       metricsByType[key].push(...mappedMetrics);
+    }
+
+    // Debug: Log transformed metrics structure
+    if (log && isDebugEnabled()) {
+      const transformSummary = Object.entries(metricsByType).map(([name, metrics]) => ({
+        count: metrics.length,
+        name,
+        sampleDate: metrics[0]?.date,
+      }));
+      debugLog(log, 'TRANSFORM', 'Metrics transformed and grouped', { byType: transformSummary });
     }
 
     // === DEDUPLICATION FLOW ===
@@ -125,6 +145,20 @@ export const saveMetrics = async (
     );
     log?.debug('Deduplication complete', { duplicateCount, newCount });
 
+    // Debug: Log detailed deduplication results
+    if (log && isDebugEnabled()) {
+      const newMetricsSummary = Object.entries(newMetrics).map(([name, metrics]) => ({
+        count: metrics.length,
+        name,
+      }));
+      debugDedup(log, 'Metrics deduplication', {
+        duplicateCount,
+        inputCount: Object.values(metricsByType).reduce((sum, m) => sum + m.length, 0),
+        newCount,
+      });
+      debugLog(log, 'DEDUP', 'New metrics after deduplication', { byType: newMetricsSummary });
+    }
+
     // 4. If all data is duplicates, return early
     if (newCount === 0) {
       response.metrics = {
@@ -138,6 +172,18 @@ export const saveMetrics = async (
     // 5. Write to Obsidian FIRST (authoritative store) with retry logic
     const obsidianStorage = getObsidianStorage();
     let obsidianSaved: number;
+
+    // Debug: Log what we're about to write to Obsidian
+    if (log && isDebugEnabled()) {
+      debugStorage(log, 'Preparing Obsidian write', {
+        data: Object.entries(newMetrics).map(([name, metrics]) => ({
+          count: metrics.length,
+          name,
+        })),
+        fileType: 'metrics',
+      });
+    }
+
     try {
       const obsidianResult = await withRetry(
         () => obsidianStorage.saveMetrics(newMetrics),
@@ -147,6 +193,13 @@ export const saveMetrics = async (
         'Obsidian write',
       );
       obsidianSaved = obsidianResult.saved;
+
+      // Debug: Log Obsidian write result
+      if (log && isDebugEnabled()) {
+        debugStorage(log, 'Obsidian write completed', {
+          metadata: { saved: obsidianSaved, updated: obsidianResult.updated },
+        });
+      }
     } catch (error) {
       // Obsidian failed after all retries - do NOT update cache, return error
       const obsidianError = error instanceof Error ? error.message : 'Unknown Obsidian error';
@@ -205,3 +258,4 @@ export const saveMetrics = async (
     return errorResponse;
   }
 };
+/* eslint-enable sonarjs/cognitive-complexity */

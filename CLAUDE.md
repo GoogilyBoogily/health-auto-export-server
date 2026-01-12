@@ -97,6 +97,24 @@ NODE_ENV             # Optional - development|production (default: development)
 DATA_DIR             # Optional - Data directory (default: ./data)
 PORT                 # Optional - Server port (default: 3001)
 LOG_LEVEL            # Optional - debug|info|warn|error (default: debug)
+DEBUG_LOGGING        # Optional - true|false - Enable verbose debug logging (default: false)
 ```
 
 Run `./create-env.sh` to generate a `.env` with a secure token.
+
+### Debug Logging
+
+Enable verbose debug logging by setting `DEBUG_LOGGING=true`. This provides detailed output for troubleshooting:
+
+**Debug Categories:**
+- `REQUEST` - Raw incoming request bodies (truncated for large payloads)
+- `RESPONSE` - Outgoing response bodies
+- `VALIDATION` - Zod schema validation input/output and errors
+- `TRANSFORM` - Data mapping and transformation (metric mapping, sleep aggregation)
+- `DEDUP` - Deduplication operations (what was filtered, counts)
+- `STORAGE` - File operations (paths, frontmatter being written)
+
+**Example usage:**
+```bash
+DEBUG_LOGGING=true bun dev
+```

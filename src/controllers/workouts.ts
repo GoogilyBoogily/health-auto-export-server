@@ -1,4 +1,5 @@
 import { cacheStorage, getObsidianStorage } from '../storage';
+import { debugDedup, debugLog, debugStorage, isDebugEnabled } from '../utils/debugLogger';
 import { extractDatesFromWorkouts, filterDuplicateWorkouts } from '../utils/deduplication';
 import { Logger } from '../utils/logger';
 
@@ -76,6 +77,7 @@ async function withRetry<T>(
   throw lastError;
 }
 
+/* eslint-disable sonarjs/cognitive-complexity -- Debug logging conditionals add necessary complexity */
 export const saveWorkouts = async (
   ingestData: IngestData,
   log?: Logger,
@@ -98,6 +100,19 @@ export const saveWorkouts = async (
 
     log?.debug('Processing workouts', { count: workouts.length });
 
+    // Debug: Log raw workouts input
+    if (log && isDebugEnabled()) {
+      debugLog(log, 'TRANSFORM', 'Raw workouts input', {
+        workoutsCount: workouts.length,
+        workoutSummary: workouts.map((w) => ({
+          date: w.start,
+          duration: w.duration,
+          name: w.name,
+          workoutId: (w as { id?: string }).id,
+        })),
+      });
+    }
+
     // === DEDUPLICATION FLOW ===
 
     // 1. Extract dates from incoming workouts
@@ -112,6 +127,23 @@ export const saveWorkouts = async (
     const { duplicateCount, newCount, newWorkouts } = filterDuplicateWorkouts(workouts, cachedData);
     log?.debug('Deduplication complete', { duplicateCount, newCount });
 
+    // Debug: Log detailed deduplication results
+    if (log && isDebugEnabled()) {
+      debugDedup(log, 'Workouts deduplication', {
+        duplicateCount,
+        inputCount: workouts.length,
+        newCount,
+      });
+      if (newWorkouts.length > 0) {
+        debugLog(log, 'DEDUP', 'New workouts after deduplication', {
+          workouts: newWorkouts.map((w) => ({
+            date: w.start,
+            name: w.name,
+          })),
+        });
+      }
+    }
+
     // 4. If all data is duplicates, return early
     if (newCount === 0) {
       response.workouts = {
@@ -125,6 +157,19 @@ export const saveWorkouts = async (
     // 5. Write to Obsidian FIRST (authoritative store) with retry logic
     const obsidianStorage = getObsidianStorage();
     let obsidianSaved: number;
+
+    // Debug: Log what we're about to write to Obsidian
+    if (log && isDebugEnabled()) {
+      debugStorage(log, 'Preparing Obsidian write', {
+        data: newWorkouts.map((w) => ({
+          date: w.start,
+          duration: w.duration,
+          name: w.name,
+        })),
+        fileType: 'workouts',
+      });
+    }
+
     try {
       const obsidianResult = await withRetry(
         () => obsidianStorage.saveWorkouts(newWorkouts),
@@ -134,6 +179,13 @@ export const saveWorkouts = async (
         'Obsidian write',
       );
       obsidianSaved = obsidianResult.saved;
+
+      // Debug: Log Obsidian write result
+      if (log && isDebugEnabled()) {
+        debugStorage(log, 'Obsidian write completed', {
+          metadata: { saved: obsidianSaved, updated: obsidianResult.updated },
+        });
+      }
     } catch (error) {
       // Obsidian failed after all retries - do NOT update cache, return error
       const obsidianError = error instanceof Error ? error.message : 'Unknown Obsidian error';
@@ -190,3 +242,4 @@ export const saveWorkouts = async (
     return errorResponse;
   }
 };
+/* eslint-enable sonarjs/cognitive-complexity */

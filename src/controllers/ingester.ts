@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 
+import { debugLog, debugValidation, isDebugEnabled } from '../utils/debugLogger';
 import { IngestDataSchema } from '../validation/schemas';
 import { saveMetrics } from './metrics';
 import { saveWorkouts } from './workouts';
@@ -16,6 +17,7 @@ export const ingestData = async (req: Request, res: Response) => {
     const parseResult = IngestDataSchema.safeParse(req.body);
     if (!parseResult.success) {
       log.warn('Invalid request body', { errors: parseResult.error.issues });
+      debugValidation(log, false, req.body, parseResult.error.issues);
       res.status(400).json({
         details: parseResult.error.issues,
         error: 'Invalid request format',
@@ -24,6 +26,16 @@ export const ingestData = async (req: Request, res: Response) => {
     }
 
     const data = parseResult.data as IngestData;
+
+    // Debug: Log successful validation with data structure summary
+    if (isDebugEnabled()) {
+      debugValidation(log, true, {
+        metricsCount: data.data.metrics?.length ?? 0,
+        metricTypes: data.data.metrics?.map((m) => m.name) ?? [],
+        workoutsCount: data.data.workouts?.length ?? 0,
+        workoutTypes: data.data.workouts?.map((w) => w.name) ?? [],
+      });
+    }
 
     log.info('Processing ingestion request', {
       hasMetrics: (data.data.metrics?.length ?? 0) > 0,
@@ -71,6 +83,13 @@ export const ingestData = async (req: Request, res: Response) => {
 
     timer.end(hasErrors ? 'warn' : 'info', 'Ingestion completed', {
       hasPartialErrors: hasErrors,
+      metricsResult: response.metrics,
+      workoutsResult: response.workouts,
+    });
+
+    // Debug: Log final processing results
+    debugLog(log, 'TRANSFORM', 'Ingestion processing complete', {
+      hasErrors,
       metricsResult: response.metrics,
       workoutsResult: response.workouts,
     });

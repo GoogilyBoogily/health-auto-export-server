@@ -5,6 +5,7 @@
 import { promises as fs } from 'node:fs';
 
 import { MetricName } from '../../types';
+import { debugLog, debugStorage, isDebugEnabled } from '../../utils/debugLogger';
 import { logger } from '../../utils/logger';
 import { withLock } from '../fileHelpers';
 import { createHealthFrontmatter, groupHealthMetricsByDate } from './formatters/health';
@@ -146,6 +147,18 @@ export class ObsidianStorage {
   ): Promise<{ isNew: boolean }> {
     const filePath = getTrackingFilePath(this.vaultPath, 'health', dateKey);
 
+    // Debug: Log health file write attempt
+    if (isDebugEnabled()) {
+      debugStorage(logger, 'Writing health file', {
+        data: Object.entries(metricsByType).map(([name, metrics]) => ({
+          count: metrics.length,
+          name,
+        })),
+        filePath,
+        fileType: 'health',
+      });
+    }
+
     return withLock(filePath, async () => {
       const existing = await readMarkdownFile(filePath);
       const isNew = !existing?.frontmatter;
@@ -156,6 +169,14 @@ export class ObsidianStorage {
         existing?.frontmatter as HealthFrontmatter | undefined,
       );
       const body = existing?.body ?? getDefaultBody('health', dateKey);
+
+      // Debug: Log frontmatter being written
+      if (isDebugEnabled()) {
+        debugLog(logger, 'STORAGE', `Health frontmatter for ${dateKey}`, {
+          frontmatterKeys: Object.keys(frontmatter),
+          isNew,
+        });
+      }
 
       await writeMarkdownFile(filePath, frontmatter, body);
 
@@ -205,6 +226,19 @@ export class ObsidianStorage {
   ): Promise<{ isNew: boolean }> {
     const filePath = getTrackingFilePath(this.vaultPath, 'sleep', dateKey);
 
+    // Debug: Log sleep file write attempt
+    if (isDebugEnabled()) {
+      debugStorage(logger, 'Writing sleep file', {
+        data: {
+          entriesCount: sleepEntries.length,
+          hasWristTemp: wristTemporary !== undefined,
+          wristTemporary,
+        },
+        filePath,
+        fileType: 'sleep',
+      });
+    }
+
     return withLock(filePath, async () => {
       const existing = await readMarkdownFile(filePath);
       const isNew = !existing?.frontmatter;
@@ -217,6 +251,14 @@ export class ObsidianStorage {
         wristTemporary,
       );
       const body = existing?.body ?? getDefaultBody('sleep', dateKey);
+
+      // Debug: Log sleep frontmatter being written
+      if (isDebugEnabled()) {
+        debugLog(logger, 'STORAGE', `Sleep frontmatter for ${dateKey}`, {
+          frontmatter,
+          isNew,
+        });
+      }
 
       await writeMarkdownFile(filePath, frontmatter, body);
 
@@ -312,6 +354,19 @@ export class ObsidianStorage {
   ): Promise<{ isNew: boolean }> {
     const filePath = getTrackingFilePath(this.vaultPath, 'workout', dateKey);
 
+    // Debug: Log workout file write attempt
+    if (isDebugEnabled()) {
+      debugStorage(logger, 'Writing workout file', {
+        data: workouts.map((w) => ({
+          duration: w.duration,
+          name: w.name,
+          start: w.start,
+        })),
+        filePath,
+        fileType: 'workout',
+      });
+    }
+
     return withLock(filePath, async () => {
       const existing = await readMarkdownFile(filePath);
       const isNew = !existing?.frontmatter;
@@ -322,6 +377,15 @@ export class ObsidianStorage {
         existing?.frontmatter as WorkoutFrontmatter | undefined,
       );
       const body = existing?.body ?? getDefaultBody('workout', dateKey);
+
+      // Debug: Log workout frontmatter being written
+      if (isDebugEnabled()) {
+        debugLog(logger, 'STORAGE', `Workout frontmatter for ${dateKey}`, {
+          frontmatter,
+          isNew,
+          workoutCount: workouts.length,
+        });
+      }
 
       await writeMarkdownFile(filePath, frontmatter, body);
 
