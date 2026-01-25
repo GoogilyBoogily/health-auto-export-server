@@ -1,14 +1,27 @@
 import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 
+import { logger } from '../utils/logger';
+
 // Lock configuration
 const LOCK_RETRY_DELAY_MS = 50;
 const LOCK_MAX_RETRIES = 100; // 5 seconds max wait
 const LOCK_STALE_MS = 30_000; // Consider lock stale after 30 seconds
 
+interface LockContent {
+  pid: number;
+  timestamp: number;
+}
+
+/**
+ * Result of checking whether to remove a stale lock.
+ */
+type StaleLockAction = 'process_alive' | 'remove' | 'retry';
+
 /**
  * Acquire an exclusive lock on a file.
  * Uses a .lock file with O_EXCL for atomic creation.
+ * Safely handles stale locks by verifying owning process before deletion.
  */
 export async function acquireLock(filePath: string): Promise<void> {
   const lockPath = `${filePath}.lock`;
@@ -23,22 +36,7 @@ export async function acquireLock(filePath: string): Promise<void> {
       return;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-        // Lock exists, check if stale
-        try {
-          const stat = await fs.stat(lockPath);
-          const age = Date.now() - stat.mtimeMs;
-          if (age > LOCK_STALE_MS) {
-            // Stale lock, remove and retry
-            // eslint-disable-next-line @typescript-eslint/no-empty-function -- Ignore unlink errors for stale locks
-            await fs.unlink(lockPath).catch(() => {});
-            continue;
-          }
-        } catch {
-          // Lock file disappeared, retry
-          continue;
-        }
-        // Wait and retry
-        await sleep(LOCK_RETRY_DELAY_MS);
+        await handleExistingLock(lockPath);
         continue;
       }
       throw error;
@@ -126,15 +124,24 @@ export async function readJsonFileOptional<T>(filePath: string): Promise<T | und
 
 /**
  * Release a lock on a file.
+ * Never throws - logs warnings for non-ENOENT errors to prevent deadlocks
+ * when called from finally blocks.
  */
 export async function releaseLock(filePath: string): Promise<void> {
   const lockPath = `${filePath}.lock`;
   try {
     await fs.unlink(lockPath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw error;
+    const errorCode = (error as NodeJS.ErrnoException).code;
+    if (errorCode !== 'ENOENT') {
+      // Log warning but don't throw - prevents deadlocks from finally blocks
+      logger.warn('Failed to release lock', {
+        errorCode,
+        errorMessage: error instanceof Error ? error.message : 'Unknown error',
+        lockPath,
+      });
     }
+    // ENOENT is fine - lock was already released
   }
 }
 
@@ -148,6 +155,88 @@ export async function withLock<T>(filePath: string, function_: () => Promise<T>)
   } finally {
     await releaseLock(filePath);
   }
+}
+
+/**
+ * Check if a stale lock should be removed.
+ * Verifies the owning process is dead before recommending removal.
+ */
+async function checkStaleLock(lockPath: string, age: number): Promise<StaleLockAction> {
+  try {
+    const content = await fs.readFile(lockPath, 'utf8');
+    const lockData = JSON.parse(content) as LockContent;
+
+    if (isProcessRunning(lockData.pid)) {
+      // Process is still alive - lock is not truly stale, just slow
+      logger.warn('Lock appears stale but owning process is alive', {
+        age,
+        lockPath,
+        ownerPid: lockData.pid,
+      });
+      return 'process_alive';
+    }
+
+    // Process is dead, safe to remove the lock
+    logger.debug('Removing stale lock from dead process', {
+      lockPath,
+      ownerPid: lockData.pid,
+    });
+    return 'remove';
+  } catch {
+    // Failed to read/parse lock content, try to remove anyway
+    // (malformed lock file or concurrent deletion)
+    return 'remove';
+  }
+}
+
+/**
+ * Handle an existing lock file - check if stale and take appropriate action.
+ * Always returns after handling, allowing the caller to continue retrying.
+ */
+async function handleExistingLock(lockPath: string): Promise<void> {
+  try {
+    const stat = await fs.stat(lockPath);
+    const age = Date.now() - stat.mtimeMs;
+
+    if (age > LOCK_STALE_MS) {
+      const action = await checkStaleLock(lockPath, age);
+
+      if (action === 'process_alive') {
+        await sleep(LOCK_RETRY_DELAY_MS);
+        return;
+      }
+
+      // Remove stale lock (ignore errors - file may have been deleted concurrently)
+      await fs.unlink(lockPath).catch(noop);
+      return;
+    }
+  } catch {
+    // Lock file disappeared during check, retry immediately
+    return;
+  }
+
+  // Lock is fresh, wait and retry
+  await sleep(LOCK_RETRY_DELAY_MS);
+}
+
+/**
+ * Check if a process with the given PID is still running.
+ * Uses process.kill with signal 0 to check without actually sending a signal.
+ */
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * No-operation function for use with .catch() to silence promise rejections.
+ */
+function noop(): void {
+  // Intentionally empty - used to silence promise rejections
 }
 
 function sleep(ms: number): Promise<void> {

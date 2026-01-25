@@ -4,25 +4,15 @@
  */
 
 import { MetricName } from '../../../types';
-import {
-  formatTime,
-  getDateKey,
-  getMonthKey,
-  getWeekKey,
-  parseDateKey,
-  roundTo,
-} from '../utils/dateUtilities';
+import { getDateKey, roundTo } from '../utils/dateUtilities';
 
-import type { Metric, NapSession, SleepFrontmatter, SleepMetric } from '../../../types';
-
-// Minimum duration in hours to be considered main sleep (vs nap)
-// Matches CSV import script threshold
-const MIN_MAIN_SLEEP_HOURS = 2;
-
-// Hours range for "evening" start time (main sleep usually starts between 6pm-6am)
-// Matches CSV import script thresholds
-const EVENING_START_HOUR = 18; // 6 PM
-const MORNING_CUTOFF_HOUR = 6; // 6 AM
+import type {
+  Metric,
+  SleepFrontmatter,
+  SleepMetric,
+  SleepSegment,
+  SleepStageEntry,
+} from '../../../types';
 
 // Night boundary hour for date assignment
 // Sleep starting before this hour belongs to the previous day's "night"
@@ -32,85 +22,29 @@ type MetricsByType = Record<string, Metric[]>;
 
 /**
  * Create sleep frontmatter from sleep metrics for a specific date.
- * Data values (core, deep, rem, awake, inBed) are already in hours from the mapper.
+ * Combines all sleep sessions into a single output with all segments.
  */
 export function createSleepFrontmatter(
   dateKey: string,
   sleepEntries: SleepMetric[],
-  existing?: SleepFrontmatter,
-  wristTemporary?: number,
+  _existing?: SleepFrontmatter,
 ): SleepFrontmatter {
-  const date = parseDateKey(dateKey);
-  const frontmatter: SleepFrontmatter = existing ?? {
+  const frontmatter: SleepFrontmatter = {
     date: dateKey,
-    monthKey: getMonthKey(date),
-    type: 'sleep',
-    weekKey: getWeekKey(date),
   };
 
-  // Always update date keys
-  frontmatter.date = dateKey;
-  frontmatter.weekKey = getWeekKey(date);
-  frontmatter.monthKey = getMonthKey(date);
-
-  // Separate main sleep from naps
-  const mainSleepEntries = sleepEntries.filter((sleep) => isMainSleep(sleep));
-  const napEntries = sleepEntries.filter((sleep) => !isMainSleep(sleep));
-
-  // Process main sleep (use the longest one if multiple)
-  if (mainSleepEntries.length > 0) {
-    // Sort by total sleep duration, take the longest
-    mainSleepEntries.sort((a, b) => b.core + b.deep + b.rem - (a.core + a.deep + a.rem));
-    const mainSleep = mainSleepEntries[0];
-
-    frontmatter.sleepStart = formatTime(mainSleep.sleepStart);
-    frontmatter.sleepEnd = formatTime(mainSleep.sleepEnd);
-    frontmatter.inBedDuration = roundTo(mainSleep.inBed, 2); // Already in hours
-    frontmatter.asleepDuration = roundTo(mainSleep.core + mainSleep.deep + mainSleep.rem, 2);
-    frontmatter.sleepEfficiency =
-      mainSleep.inBed > 0
-        ? Math.round(((mainSleep.core + mainSleep.deep + mainSleep.rem) / mainSleep.inBed) * 100)
-        : undefined;
-
-    // Sleep stage breakdown (already in hours)
-    frontmatter.coreHours = roundTo(mainSleep.core, 2);
-    frontmatter.deepHours = roundTo(mainSleep.deep, 2);
-    frontmatter.remHours = roundTo(mainSleep.rem, 2);
-    frontmatter.awakeHours = roundTo(mainSleep.awake, 2);
-
-    // Sleep segments count (from segment aggregation)
-    if (mainSleep.segmentCount) {
-      frontmatter.sleepSegments = mainSleep.segmentCount;
-    }
-
-    // Source
-    frontmatter.source = mainSleep.source;
+  if (sleepEntries.length === 0) {
+    return frontmatter;
   }
 
-  // Add wrist temperature if available
-  if (wristTemporary !== undefined) {
-    frontmatter.wristTemp = wristTemporary;
-  }
+  // Collect all segments from all entries
+  const allSegments = collectAndSortSegments(sleepEntries);
 
-  // Process naps
-  if (napEntries.length > 0) {
-    const napSessions: NapSession[] = napEntries.map((nap) => ({
-      duration: roundTo(nap.core + nap.deep + nap.rem, 2), // Already in hours
-      endTime: formatTime(nap.sleepEnd) ?? '',
-      startTime: formatTime(nap.sleepStart) ?? '',
-    }));
-
-    frontmatter.napSessions = napSessions;
-    frontmatter.napCount = napSessions.length;
-    frontmatter.napDuration = roundTo(
-      napSessions.reduce((sum, n) => sum + n.duration, 0),
-      2,
-    );
+  // Build frontmatter from segments or fall back to aggregate values
+  if (allSegments.length > 0) {
+    populateFromSegments(frontmatter, allSegments);
   } else {
-    // Remove nap fields if no naps
-    delete frontmatter.napSessions;
-    delete frontmatter.napCount;
-    delete frontmatter.napDuration;
+    populateFromAggregates(frontmatter, sleepEntries);
   }
 
   return frontmatter;
@@ -163,8 +97,42 @@ export function mergeSleepFrontmatter(
   return {
     ...existing,
     ...newData,
-    type: 'sleep',
   };
+}
+
+/**
+ * Collect segments from all sleep entries and sort by start time.
+ */
+function collectAndSortSegments(sleepEntries: SleepMetric[]): SleepSegment[] {
+  const allSegments: SleepSegment[] = [];
+  for (const entry of sleepEntries) {
+    if (entry.segments) {
+      allSegments.push(...entry.segments);
+    }
+  }
+  allSegments.sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+  return allSegments;
+}
+
+/**
+ * Format a Date to ISO 8601 string with local timezone offset.
+ * Example output: "2025-12-29T21:39:09-06:00"
+ */
+function formatIsoTimestamp(date: Date): string {
+  const year = String(date.getFullYear());
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+
+  // Get timezone offset in hours and minutes
+  const tzOffset = -date.getTimezoneOffset();
+  const tzSign = tzOffset >= 0 ? '+' : '-';
+  const tzHours = String(Math.floor(Math.abs(tzOffset) / 60)).padStart(2, '0');
+  const tzMinutes = String(Math.abs(tzOffset) % 60).padStart(2, '0');
+
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}${tzSign}${tzHours}:${tzMinutes}`;
 }
 
 /**
@@ -185,18 +153,90 @@ function getNightDate(sleepStart: Date): string {
 }
 
 /**
- * Determine if a sleep entry is the main sleep (vs a nap).
- * Data values are already in hours from the mapper.
+ * Populate frontmatter from aggregated sleep metrics (legacy fallback).
  */
-function isMainSleep(sleep: SleepMetric): boolean {
-  const totalSleepHours = sleep.core + sleep.deep + sleep.rem; // Already in hours
-  const startHour = new Date(sleep.sleepStart).getHours();
+function populateFromAggregates(frontmatter: SleepFrontmatter, entries: SleepMetric[]): void {
+  let totalCore = 0;
+  let totalDeep = 0;
+  let totalRem = 0;
+  let totalAwake = 0;
+  let totalInBed = 0;
+  let totalSegmentCount = 0;
+  let earliestStart: Date | undefined;
+  let latestEnd: Date | undefined;
 
-  // Main sleep criteria:
-  // 1. Duration >= MIN_MAIN_SLEEP_HOURS (2 hours)
-  // 2. Starts in evening (6pm-midnight) OR early morning (midnight-6am)
-  const isLongEnough = totalSleepHours >= MIN_MAIN_SLEEP_HOURS;
-  const isEveningStart = startHour >= EVENING_START_HOUR || startHour < MORNING_CUTOFF_HOUR;
+  for (const entry of entries) {
+    totalCore += entry.core;
+    totalDeep += entry.deep;
+    totalRem += entry.rem;
+    totalAwake += entry.awake;
+    totalInBed += entry.inBed;
+    totalSegmentCount += entry.segmentCount ?? 0;
 
-  return isLongEnough && isEveningStart;
+    if (!earliestStart || entry.sleepStart < earliestStart) {
+      earliestStart = entry.sleepStart;
+    }
+    if (!latestEnd || entry.sleepEnd > latestEnd) {
+      latestEnd = entry.sleepEnd;
+    }
+  }
+
+  if (earliestStart) {
+    frontmatter.sleepStart = formatIsoTimestamp(earliestStart);
+  }
+  if (latestEnd) {
+    frontmatter.sleepEnd = formatIsoTimestamp(latestEnd);
+  }
+
+  const asleepDuration = totalCore + totalDeep + totalRem;
+  frontmatter.inBedDuration = roundTo(totalInBed, 2);
+  frontmatter.asleepDuration = roundTo(asleepDuration, 2);
+  frontmatter.sleepEfficiency =
+    totalInBed > 0 ? Math.round((asleepDuration / totalInBed) * 100) : undefined;
+  if (totalSegmentCount > 0) {
+    frontmatter.sleepSegments = totalSegmentCount;
+  }
+  frontmatter.coreHours = roundTo(totalCore, 2);
+  frontmatter.deepHours = roundTo(totalDeep, 2);
+  frontmatter.remHours = roundTo(totalRem, 2);
+  frontmatter.awakeHours = roundTo(totalAwake, 2);
+}
+
+/**
+ * Populate frontmatter from individual sleep segments.
+ */
+function populateFromSegments(frontmatter: SleepFrontmatter, segments: SleepSegment[]): void {
+  frontmatter.sleepStages = segments.map(
+    (seg): SleepStageEntry => ({
+      duration: roundTo(seg.duration, 2),
+      endTime: formatIsoTimestamp(seg.endTime),
+      stage: seg.stage,
+      startTime: formatIsoTimestamp(seg.startTime),
+    }),
+  );
+
+  const firstSegment = segments[0];
+  const lastSegment = segments.at(-1) ?? firstSegment;
+
+  frontmatter.sleepStart = formatIsoTimestamp(firstSegment.startTime);
+  frontmatter.sleepEnd = formatIsoTimestamp(lastSegment.endTime);
+
+  const totals = { awake: 0, core: 0, deep: 0, rem: 0 };
+  for (const seg of segments) {
+    totals[seg.stage] += seg.duration;
+  }
+
+  const inBedDuration =
+    (lastSegment.endTime.getTime() - firstSegment.startTime.getTime()) / (1000 * 60 * 60);
+  const asleepDuration = totals.core + totals.deep + totals.rem;
+
+  frontmatter.inBedDuration = roundTo(inBedDuration, 2);
+  frontmatter.asleepDuration = roundTo(asleepDuration, 2);
+  frontmatter.sleepEfficiency =
+    inBedDuration > 0 ? Math.round((asleepDuration / inBedDuration) * 100) : undefined;
+  frontmatter.sleepSegments = segments.length;
+  frontmatter.coreHours = roundTo(totals.core, 2);
+  frontmatter.deepHours = roundTo(totals.deep, 2);
+  frontmatter.remHours = roundTo(totals.rem, 2);
+  frontmatter.awakeHours = roundTo(totals.awake, 2);
 }

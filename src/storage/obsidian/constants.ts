@@ -13,6 +13,6 @@ export const TRACKING_PATHS: Record<TrackingType, string> = {
 
 export const TRACKING_BODY_TEMPLATES: Record<TrackingType, string> = {
   health: '# {{date}}\n\n## Health Metrics',
-  sleep: '# {{date}}\n\n## Sleep Log',
+  sleep: '\n## Sleep Log',
   workout: '\n\n## Workout Log',
 };

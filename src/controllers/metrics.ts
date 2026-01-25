@@ -3,6 +3,7 @@ import { cacheStorage, getObsidianStorage } from '../storage';
 import { debugDedup, debugLog, debugStorage, isDebugEnabled } from '../utils/debugLogger';
 import { extractDatesFromMetrics, filterDuplicateMetrics } from '../utils/deduplication';
 import { Logger } from '../utils/logger';
+import { withRetry } from '../utils/retry';
 
 import type { IngestData, IngestResponse, Metric } from '../types';
 
@@ -43,39 +44,6 @@ function scheduleCleanup(log?: Logger): void {
 
   // Don't block process exit
   timeout.unref();
-}
-
-/**
- * Execute a function with exponential backoff retry logic.
- */
-async function withRetry<T>(
-  operation: () => Promise<T>,
-  maxRetries: number,
-  baseDelayMs: number,
-  log?: Logger,
-  operationName?: string,
-): Promise<T> {
-  let lastError: Error = new Error('Operation failed with no error details');
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await operation();
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error('Unknown error');
-
-      if (attempt < maxRetries - 1) {
-        const delay = baseDelayMs * Math.pow(2, attempt);
-        log?.warn(`${operationName ?? 'Operation'} failed, retrying in ${String(delay)}ms`, {
-          attempt: attempt + 1,
-          error: lastError.message,
-          maxRetries,
-        });
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  throw lastError;
 }
 
 /* eslint-disable sonarjs/cognitive-complexity -- Debug logging conditionals add necessary complexity */
@@ -185,13 +153,12 @@ export const saveMetrics = async (
     }
 
     try {
-      const obsidianResult = await withRetry(
-        () => obsidianStorage.saveMetrics(newMetrics),
-        MAX_OBSIDIAN_RETRIES,
-        RETRY_BASE_DELAY_MS,
+      const obsidianResult = await withRetry(() => obsidianStorage.saveMetrics(newMetrics), {
+        baseDelayMs: RETRY_BASE_DELAY_MS,
         log,
-        'Obsidian write',
-      );
+        maxRetries: MAX_OBSIDIAN_RETRIES,
+        operationName: 'Obsidian write',
+      });
       obsidianSaved = obsidianResult.saved;
 
       // Debug: Log Obsidian write result

@@ -4,9 +4,11 @@ import cors from 'cors';
 import express from 'express';
 
 import { requireWriteAuth } from './middleware/auth';
+import { rateLimit } from './middleware/rateLimit';
 import { requestLogger } from './middleware/requestLogger';
+import { requestTimeout } from './middleware/requestTimeout';
 import ingesterRouter from './routes/ingester';
-import { initObsidianStorage, storage } from './storage';
+import { cacheStorage, initObsidianStorage, storage } from './storage';
 import { logger } from './utils/logger';
 
 /**
@@ -46,18 +48,38 @@ app.disable('x-powered-by'); // Prevent version disclosure
 const port = Number.parseInt(process.env.PORT ?? '3001', 10);
 let server: Server;
 
+// Configure CORS origins from environment variable (comma-separated list)
+// If not set, defaults to '*' (allow all) for development convenience
+// In production, set CORS_ORIGINS to restrict allowed origins
+function getCorsOrigins(): string[] {
+  const corsOriginsEnv = process.env.CORS_ORIGINS;
+
+  if (!corsOriginsEnv || corsOriginsEnv === '*') {
+    // Default: allow all origins (development mode)
+    return ['*'];
+  }
+
+  // Parse comma-separated origins
+  return corsOriginsEnv.split(',').map((origin) => origin.trim());
+}
+
 const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization', 'api-key'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  origin: '*',
+  origin: getCorsOrigins(),
 };
 
-// eslint-disable-next-line sonarjs/cors -- CORS is intentionally enabled for API access
 app.use(cors(corsOptions));
 
 // Reduced body limit from 200mb to 50mb to mitigate DoS risk
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Add rate limiting (100 requests per minute per IP, excludes /health)
+app.use(rateLimit);
+
+// Add request timeout middleware (2 minute default)
+app.use(requestTimeout);
 
 // Add request logging middleware (before auth and routes)
 app.use(requestLogger);
@@ -70,13 +92,37 @@ app.get('/health', (_req: express.Request, res: express.Response) => {
   res.status(200).send('OK');
 });
 
+/**
+ * Run shutdown cleanup and exit process.
+ */
+async function runShutdownCleanup(): Promise<void> {
+  logger.info('Server closed, running final cleanup...');
+
+  // Run cache cleanup before exiting to prevent orphaned temp files
+  try {
+    const cleanupResult = await cacheStorage.cleanupExpiredCache();
+    if (cleanupResult.deletedFiles > 0) {
+      logger.info('Shutdown cleanup completed', cleanupResult);
+    }
+  } catch (error) {
+    logger.warn('Shutdown cleanup failed', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+    // Don't block shutdown on cleanup failure
+  }
+
+  logger.info('Shutdown complete');
+  // eslint-disable-next-line n/no-process-exit, unicorn/no-process-exit -- Intentional server shutdown
+  process.exit(0);
+}
+
 // Graceful shutdown handler
 const gracefulShutdown = (signal: string) => {
   logger.info(`Received ${signal}, shutting down gracefully...`);
+
   server.close(() => {
-    logger.info('Server closed');
-    // eslint-disable-next-line n/no-process-exit, unicorn/no-process-exit -- Intentional server shutdown
-    process.exit(0);
+    // Run async cleanup in a void context to avoid promise issues
+    void runShutdownCleanup();
   });
 
   // Force exit after 10 seconds (unref to not block process exit)

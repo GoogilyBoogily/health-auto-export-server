@@ -9,13 +9,29 @@ const MetricDataSchema = z.object({
   units: z.string(),
 });
 
-// Flexible measurement schema
-const MeasurementSchema = z
+// Simple measurement schema - just qty and units (no date/source)
+const SimpleMeasurementSchema = z.object({
+  qty: z.number(),
+  units: z.string(),
+});
+
+// Full measurement schema - includes date and source
+const FullMeasurementSchema = z.object({
+  date: z.union([z.string(), z.date()]),
+  qty: z.number(),
+  source: z.string(),
+  units: z.string(),
+});
+
+// Flexible measurement schema - accepts either simple or full format
+const MeasurementSchema = z.union([SimpleMeasurementSchema, FullMeasurementSchema]).optional();
+
+// Heart rate summary schema - nested max/avg/min structure
+const HeartRateSummarySchema = z
   .object({
-    date: z.union([z.string(), z.date()]),
-    qty: z.number(),
-    source: z.string(),
-    units: z.string(),
+    avg: SimpleMeasurementSchema.optional(),
+    max: SimpleMeasurementSchema.optional(),
+    min: SimpleMeasurementSchema.optional(),
   })
   .optional();
 
@@ -35,19 +51,26 @@ const LocationSchema = z.object({
 
 // Workout data schema
 const WorkoutDataSchema = z.object({
-  activeEnergy: z.record(z.string(), z.unknown()).optional(),
+  activeEnergy: z.array(z.record(z.string(), z.unknown())).optional(),
   activeEnergyBurned: MeasurementSchema,
+  avgHeartRate: SimpleMeasurementSchema.optional(),
   distance: MeasurementSchema,
   duration: z.number(),
   end: z.union([z.string(), z.date()]),
+  heartRate: HeartRateSummarySchema,
   heartRateData: z.array(z.record(z.string(), z.unknown())).optional(),
   heartRateRecovery: z.array(z.record(z.string(), z.unknown())).optional(),
   humidity: MeasurementSchema,
   id: z.string(),
   intensity: MeasurementSchema,
+  isIndoor: z.boolean().optional(),
+  location: z.string().optional(),
+  maxHeartRate: SimpleMeasurementSchema.optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   name: z.string(),
   route: z.array(LocationSchema).optional(),
   start: z.union([z.string(), z.date()]),
+  stepCadence: SimpleMeasurementSchema.optional(),
   stepCount: z.array(z.record(z.string(), z.unknown())).optional(),
   temperature: MeasurementSchema,
 });

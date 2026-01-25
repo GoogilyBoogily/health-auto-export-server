@@ -15,7 +15,9 @@ export type {
   MetricCommon,
   MetricData,
   SleepMetric,
+  SleepSegment,
   SleepSegmentRaw,
+  SleepStage,
   SleepStageValue,
 } from './metric';
 
@@ -26,9 +28,9 @@ export { MetricName } from './metricName';
 export type {
   HealthFrontmatter,
   MarkdownFile,
-  NapSession,
   ObsidianFrontmatter,
   SleepFrontmatter,
+  SleepStageEntry,
   TrackingType,
   WorkoutEntry,
   WorkoutFrontmatter,

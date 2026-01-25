@@ -127,6 +127,47 @@ export function mergeWorkoutFrontmatter(
 }
 
 /**
+ * Extract heart rate values from workout data.
+ * Priority: pre-computed fields > nested summary > calculated from array
+ */
+function extractHeartRateValues(workout: WorkoutData): {
+  avg?: number;
+  max?: number;
+  min?: number;
+} {
+  const result: { avg?: number; max?: number; min?: number } = {};
+  const hrData = workout.heartRateData;
+  const hasHrData = hrData && hrData.length > 0;
+
+  // Average heart rate
+  if (workout.avgHeartRate?.qty !== undefined) {
+    result.avg = Math.round(workout.avgHeartRate.qty);
+  } else if (workout.heartRate?.avg?.qty !== undefined) {
+    result.avg = Math.round(workout.heartRate.avg.qty);
+  } else if (hasHrData) {
+    result.avg = Math.round(hrData.reduce((sum, hr) => sum + hr.Avg, 0) / hrData.length);
+  }
+
+  // Max heart rate
+  if (workout.maxHeartRate?.qty !== undefined) {
+    result.max = Math.round(workout.maxHeartRate.qty);
+  } else if (workout.heartRate?.max?.qty !== undefined) {
+    result.max = Math.round(workout.heartRate.max.qty);
+  } else if (hasHrData) {
+    result.max = Math.round(Math.max(...hrData.map((hr) => hr.Max)));
+  }
+
+  // Min heart rate
+  if (workout.heartRate?.min?.qty !== undefined) {
+    result.min = Math.round(workout.heartRate.min.qty);
+  } else if (hasHrData) {
+    result.min = Math.round(Math.min(...hrData.map((hr) => hr.Min)));
+  }
+
+  return result;
+}
+
+/**
  * Convert workout name to kebab-case ID.
  */
 function toWorkoutId(name: string): string {
@@ -161,17 +202,29 @@ function workoutToEntry(workout: WorkoutData): WorkoutEntry {
     entry.distance = roundTo(workout.distance.qty, 2);
   }
 
-  // Process heart rate data
-  if (workout.heartRateData && workout.heartRateData.length > 0) {
-    const hrData = workout.heartRateData;
-    entry.avgHeartRate = Math.round(hrData.reduce((sum, hr) => sum + hr.Avg, 0) / hrData.length);
-    entry.maxHeartRate = Math.round(Math.max(...hrData.map((hr) => hr.Max)));
-    entry.minHeartRate = Math.round(Math.min(...hrData.map((hr) => hr.Min)));
-  }
+  // Extract heart rate values
+  const hrValues = extractHeartRateValues(workout);
+  if (hrValues.avg !== undefined) entry.avgHeartRate = hrValues.avg;
+  if (hrValues.max !== undefined) entry.maxHeartRate = hrValues.max;
+  if (hrValues.min !== undefined) entry.minHeartRate = hrValues.min;
 
   // Process step count
   if (workout.stepCount && workout.stepCount.length > 0) {
     entry.stepCount = Math.round(workout.stepCount.reduce((sum, s) => sum + s.qty, 0));
+  }
+
+  // Add step cadence if available
+  if (workout.stepCadence?.qty !== undefined) {
+    entry.stepCadence = roundTo(workout.stepCadence.qty, 2);
+  }
+
+  // Add location info if available
+  if (workout.location !== undefined) {
+    entry.location = workout.location;
+  }
+
+  if (workout.isIndoor !== undefined) {
+    entry.isIndoor = workout.isIndoor;
   }
 
   return entry;

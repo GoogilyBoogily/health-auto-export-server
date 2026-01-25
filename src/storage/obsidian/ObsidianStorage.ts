@@ -4,7 +4,6 @@
 
 import { promises as fs } from 'node:fs';
 
-import { MetricName } from '../../types';
 import { debugLog, debugStorage, isDebugEnabled } from '../../utils/debugLogger';
 import { logger } from '../../utils/logger';
 import { withLock } from '../fileHelpers';
@@ -19,7 +18,6 @@ import {
 } from './utils/markdownUtilities';
 
 import type {
-  BaseMetric,
   HealthFrontmatter,
   Metric,
   SaveResult,
@@ -28,10 +26,6 @@ import type {
   WorkoutData,
   WorkoutFrontmatter,
 } from '../../types';
-
-// Night boundary hour for wrist temperature date assignment
-// Temperature readings before this hour belong to previous day's sleep
-const NIGHT_BOUNDARY_HOUR = 6;
 
 export class ObsidianStorage {
   private vaultPath: string;
@@ -222,7 +216,6 @@ export class ObsidianStorage {
   private async saveSleepForDate(
     dateKey: string,
     sleepEntries: Metric[],
-    wristTemporary?: number,
   ): Promise<{ isNew: boolean }> {
     const filePath = getTrackingFilePath(this.vaultPath, 'sleep', dateKey);
 
@@ -231,8 +224,6 @@ export class ObsidianStorage {
       debugStorage(logger, 'Writing sleep file', {
         data: {
           entriesCount: sleepEntries.length,
-          hasWristTemp: wristTemporary !== undefined,
-          wristTemporary,
         },
         filePath,
         fileType: 'sleep',
@@ -248,7 +239,6 @@ export class ObsidianStorage {
         dateKey,
         sleepEntries as SleepMetric[],
         existing?.frontmatter as SleepFrontmatter | undefined,
-        wristTemporary,
       );
       const body = existing?.body ?? getDefaultBody('sleep', dateKey);
 
@@ -281,17 +271,13 @@ export class ObsidianStorage {
 
     logger.debug('Saving sleep metrics to Obsidian', { dates: byDate.size });
 
-    // Extract wrist temperature by date
-    const wristTemporaryByDate = this.getWristTempByDate(metricsByType);
-
     let totalSaved = 0;
     let totalUpdated = 0;
     const errors: string[] = [];
 
     for (const [dateKey, sleepEntries] of byDate) {
       try {
-        const wristTemporary = wristTemporaryByDate.get(dateKey);
-        const result = await this.saveSleepForDate(dateKey, sleepEntries, wristTemporary);
+        const result = await this.saveSleepForDate(dateKey, sleepEntries);
         if (result.isNew) {
           totalSaved++;
         } else {
@@ -309,43 +295,6 @@ export class ObsidianStorage {
       success: errors.length === 0,
       updated: totalUpdated,
     };
-  }
-
-  /**
-   * Extract wrist temperature readings and group by sleep date.
-   * Uses the same night boundary logic as sleep date assignment.
-   */
-  private getWristTempByDate(metricsByType: Record<string, Metric[]>): Map<string, number> {
-    const wristTemporaryByDate = new Map<string, number>();
-
-    const wristTemporaryMetrics = metricsByType[MetricName.APPLE_SLEEPING_WRIST_TEMPERATURE] as
-      | BaseMetric[]
-      | undefined;
-    if (!wristTemporaryMetrics || wristTemporaryMetrics.length === 0) {
-      return wristTemporaryByDate;
-    }
-
-    for (const metric of wristTemporaryMetrics) {
-      const date = new Date(metric.date);
-      const hour = date.getHours();
-
-      // Use night boundary logic (before 6 AM = previous day's sleep)
-      if (hour < NIGHT_BOUNDARY_HOUR) {
-        date.setDate(date.getDate() - 1);
-      }
-
-      const dateKey = date.toISOString().split('T')[0]; // YYYY-MM-DD
-      const existing = wristTemporaryByDate.get(dateKey);
-
-      if (existing === undefined) {
-        wristTemporaryByDate.set(dateKey, Math.round(metric.qty * 100) / 100);
-      } else {
-        // Average multiple readings for the same date
-        wristTemporaryByDate.set(dateKey, Math.round(((existing + metric.qty) / 2) * 100) / 100);
-      }
-    }
-
-    return wristTemporaryByDate;
   }
 
   private async saveWorkoutsForDate(

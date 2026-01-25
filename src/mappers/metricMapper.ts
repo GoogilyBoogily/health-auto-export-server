@@ -14,11 +14,26 @@ import type {
   Metric,
   MetricData,
   SleepMetric,
+  SleepSegment,
   SleepSegmentRaw,
+  SleepStage,
 } from '../types';
 
 // Gap threshold for grouping sleep segments into sessions (in minutes)
 const SESSION_GAP_THRESHOLD_MINUTES = 30;
+
+/**
+ * Convert uppercase sleep stage value to lowercase.
+ */
+function toLowercaseStage(value: 'Awake' | 'Core' | 'Deep' | 'REM'): SleepStage {
+  const stageMap: Record<string, SleepStage> = {
+    Awake: 'awake',
+    Core: 'core',
+    Deep: 'deep',
+    REM: 'rem',
+  };
+  return stageMap[value];
+}
 
 export const mapMetric = (
   metric: MetricData,
@@ -111,8 +126,24 @@ export const mapMetric = (
 function aggregateSegments(segments: SleepSegmentRaw[], units: string): SleepMetric[] {
   if (segments.length === 0) return [];
 
+  // Filter out invalid segments before processing
+  const validSegments = segments.filter((seg) => {
+    const isValid = isValidSleepSegment(seg);
+    if (!isValid && isDebugEnabled()) {
+      logger.warn('Skipping invalid sleep segment', {
+        endDate: seg.endDate,
+        qty: seg.qty,
+        startDate: seg.startDate,
+        value: seg.value,
+      });
+    }
+    return isValid;
+  });
+
+  if (validSegments.length === 0) return [];
+
   // Sort by start time (toSorted creates a copy, avoiding mutation)
-  const sorted = [...segments].toSorted(
+  const sorted = [...validSegments].toSorted(
     (a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime(),
   );
 
@@ -135,6 +166,14 @@ function aggregateSegments(segments: SleepSegmentRaw[], units: string): SleepMet
     const inBedHours = (sleepEnd.getTime() - sleepStart.getTime()) / (1000 * 60 * 60);
     const asleepHours = totals.Core + totals.Deep + totals.REM;
 
+    // Convert raw segments to typed SleepSegment objects
+    const segments: SleepSegment[] = session.map((seg) => ({
+      duration: seg.qty, // Already in hours
+      endTime: new Date(seg.endDate),
+      stage: toLowercaseStage(seg.value),
+      startTime: new Date(seg.startDate),
+    }));
+
     return {
       awake: totals.Awake,
       core: totals.Core,
@@ -145,6 +184,7 @@ function aggregateSegments(segments: SleepSegmentRaw[], units: string): SleepMet
       inBedStart: sleepStart,
       rem: totals.REM,
       segmentCount: session.length,
+      segments,
       sleepEnd,
       sleepStart,
       source: first.source,
@@ -207,4 +247,23 @@ function isSegmentFormat(data: unknown[]): boolean {
   if (data.length === 0) return false;
   const first = data[0] as Record<string, unknown>;
   return 'value' in first && 'startDate' in first && 'endDate' in first;
+}
+
+/**
+ * Validate a sleep segment has valid duration and time range.
+ */
+function isValidSleepSegment(segment: SleepSegmentRaw): boolean {
+  // Duration must be positive
+  if (segment.qty <= 0) {
+    return false;
+  }
+
+  // End time must be after start time
+  const startTime = new Date(segment.startDate).getTime();
+  const endTime = new Date(segment.endDate).getTime();
+  if (endTime <= startTime) {
+    return false;
+  }
+
+  return true;
 }

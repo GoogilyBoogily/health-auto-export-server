@@ -124,7 +124,7 @@ export enum MetricName {
   UNDER_WATER_DEPTH = 'under_water_depth',
   UNDER_WATER_TEMPERATURE = 'under_water_temperature',
   UV_EXPOSURE = 'uv_exposure',
-  VO2_MAX = 'vo2max',
+  VO2_MAX = 'vo2_max',
   WAIST_CIRCUMFERENCE = 'waist_circumference',
   WALKING_ASYMMETRY_PERCENTAGE = 'walking_asymmetry_percentage',
   WALKING_DOUBLE_SUPPORT_PERCENTAGE = 'walking_double_support_percentage',

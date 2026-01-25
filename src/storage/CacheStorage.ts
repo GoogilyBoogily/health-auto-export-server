@@ -26,6 +26,7 @@ import type {
 } from '../types';
 
 const DEFAULT_RETENTION_DAYS = 7;
+const MAX_CLEANUP_FAILURES = 5;
 
 /**
  * Rolling cache storage for health data deduplication.
@@ -33,6 +34,7 @@ const DEFAULT_RETENTION_DAYS = 7;
  * duplicate detection before writing to Obsidian.
  */
 export class CacheStorage {
+  private cleanupConsecutiveFailures = 0;
   private dataDirectory: string;
   private retentionDays: number;
 
@@ -136,6 +138,7 @@ export class CacheStorage {
   /**
    * Remove cache files older than retentionDays.
    * Called after each successful data ingestion.
+   * Tracks consecutive failures and throws after MAX_CLEANUP_FAILURES to prevent disk from filling up.
    */
   async cleanupExpiredCache(): Promise<{ deletedFiles: number }> {
     if (this.retentionDays <= 0) {
@@ -148,18 +151,49 @@ export class CacheStorage {
     cutoffDate.setUTCHours(0, 0, 0, 0);
 
     let deletedFiles = 0;
+    let cleanupSucceeded = true;
 
     // Cleanup both metrics and workouts directories
     for (const subDirectory of ['metrics', 'workouts']) {
       const baseDirectory = path.join(this.dataDirectory, subDirectory);
-      deletedFiles += await this.cleanupDirectory(baseDirectory, cutoffDate);
+      try {
+        deletedFiles += await this.cleanupDirectory(baseDirectory, cutoffDate);
+      } catch (error) {
+        cleanupSucceeded = false;
+        logger.error('Cache cleanup failed for directory', error, {
+          baseDirectory,
+          consecutiveFailures: this.cleanupConsecutiveFailures + 1,
+        });
+      }
     }
 
-    if (deletedFiles > 0) {
-      logger.info('Cache cleanup completed', {
-        cutoffDate: cutoffDate.toISOString(),
+    if (cleanupSucceeded) {
+      // Reset failure counter on success
+      this.cleanupConsecutiveFailures = 0;
+
+      if (deletedFiles > 0) {
+        logger.info('Cache cleanup completed', {
+          cutoffDate: cutoffDate.toISOString(),
+          deletedFiles,
+          retentionDays: this.retentionDays,
+        });
+      }
+    } else {
+      this.cleanupConsecutiveFailures++;
+
+      if (this.cleanupConsecutiveFailures >= MAX_CLEANUP_FAILURES) {
+        const errorMessage = `Cache cleanup failed ${String(this.cleanupConsecutiveFailures)} consecutive times - disk may fill up`;
+        logger.error(errorMessage, undefined, {
+          consecutiveFailures: this.cleanupConsecutiveFailures,
+          maxFailures: MAX_CLEANUP_FAILURES,
+        });
+        throw new Error(errorMessage);
+      }
+
+      logger.warn('Cache cleanup partially failed', {
+        consecutiveFailures: this.cleanupConsecutiveFailures,
         deletedFiles,
-        retentionDays: this.retentionDays,
+        maxFailures: MAX_CLEANUP_FAILURES,
       });
     }
 
@@ -704,8 +738,12 @@ export class CacheStorage {
   // === DIRECT APPEND HELPERS (for pre-deduplicated data) ===
 
   /**
-   * Append metrics directly to file without deduplication checks.
+   * Append metrics to file with re-deduplication inside the lock.
    * Called by saveMetricsDirectly() after upstream deduplication.
+   *
+   * Re-checks for duplicates inside the lock to handle race conditions
+   * where two concurrent requests both pass upstream dedup but one
+   * writes before the other acquires the lock.
    */
   private async appendMetricsToFile(
     typeMetrics: Record<string, Metric[]>,
@@ -724,9 +762,23 @@ export class CacheStorage {
 
       for (const [metricType, metrics] of Object.entries(typeMetrics)) {
         content.metrics[metricType] ??= [];
-        // Simply append without deduplication checks
-        content.metrics[metricType].push(...metrics);
-        saved += metrics.length;
+
+        // Build lookup map for O(1) deduplication (re-check inside lock)
+        const existingMap = new Map<string, number>();
+        for (const [index, m] of content.metrics[metricType].entries()) {
+          existingMap.set(this.getMetricKey(m), index);
+        }
+
+        // Only append metrics that don't already exist
+        for (const metric of metrics) {
+          const key = this.getMetricKey(metric);
+          if (!existingMap.has(key)) {
+            content.metrics[metricType].push(metric);
+            existingMap.set(key, content.metrics[metricType].length - 1);
+            saved++;
+          }
+          // Skip duplicates silently (race condition from concurrent requests)
+        }
       }
 
       await atomicWrite(filePath, content);

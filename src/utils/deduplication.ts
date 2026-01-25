@@ -43,8 +43,29 @@ export function buildWorkoutIdSet(cachedData: Map<string, WorkoutDailyFile>): Se
 /**
  * Create a deterministic hash string for a metric.
  * Two metrics with identical data will produce the same hash.
+ *
+ * Uses a fast path for common BaseMetric types (90%+ of traffic)
+ * to avoid expensive recursive normalization.
  */
 export function createMetricHash(metric: Metric): string {
+  // Fast path for BaseMetric (most common type)
+  // These have: date, qty, units, source, and optionally metadata
+  const baseMetric = metric as MetricCommon & { qty?: number; units?: string };
+  if (
+    baseMetric.qty !== undefined &&
+    baseMetric.units !== undefined &&
+    !('systolic' in metric) &&
+    !('Avg' in metric) &&
+    !('asleep' in metric)
+  ) {
+    // Construct a deterministic hash string directly
+    const date = new Date(baseMetric.date).toISOString();
+    const source = baseMetric.source ?? '';
+    const metadata = baseMetric.metadata ? JSON.stringify(baseMetric.metadata) : '';
+    return `${date}|${source}|${String(baseMetric.qty)}|${baseMetric.units}|${metadata}`;
+  }
+
+  // Slow path for complex metrics (blood pressure, heart rate, sleep)
   const normalized = normalizeValue(metric);
   return JSON.stringify(normalized);
 }
@@ -84,6 +105,9 @@ export function extractDatesFromWorkouts(workouts: WorkoutData[]): string[] {
 /**
  * Filter metrics to remove exact duplicates that exist in cache.
  * Returns only genuinely new metrics.
+ *
+ * Uses a separate Set for within-batch deduplication to avoid
+ * memory leaks from modifying the cache hash set.
  */
 export function filterDuplicateMetrics(
   incoming: Record<string, Metric[]>,
@@ -94,6 +118,8 @@ export function filterDuplicateMetrics(
   newMetrics: Record<string, Metric[]>;
 } {
   const existingHashes = buildMetricHashSet(cachedData);
+  // Separate set for within-batch deduplication to avoid memory leak
+  const batchHashes = new Set<string>();
   const newMetrics: Record<string, Metric[]> = {};
   let duplicateCount = 0;
   let newCount = 0;
@@ -103,12 +129,13 @@ export function filterDuplicateMetrics(
 
     for (const metric of metrics) {
       const hash = createMetricHash(metric);
-      if (existingHashes.has(hash)) {
+      if (existingHashes.has(hash) || batchHashes.has(hash)) {
         duplicateCount++;
       } else {
         filtered.push(metric);
-        // Add to set to prevent duplicates within same batch
-        existingHashes.add(hash);
+        // Add to batch set to prevent duplicates within same batch
+        // (don't modify existingHashes - that would cause memory leak)
+        batchHashes.add(hash);
         newCount++;
       }
     }
@@ -124,6 +151,9 @@ export function filterDuplicateMetrics(
 /**
  * Filter workouts to remove those already in cache.
  * Uses workoutId as the unique identifier.
+ *
+ * Uses a separate Set for within-batch deduplication to avoid
+ * memory leaks from modifying the cache ID set.
  */
 export function filterDuplicateWorkouts(
   incoming: WorkoutData[],
@@ -134,16 +164,19 @@ export function filterDuplicateWorkouts(
   newWorkouts: WorkoutData[];
 } {
   const existingIds = buildWorkoutIdSet(cachedData);
+  // Separate set for within-batch deduplication to avoid memory leak
+  const batchIds = new Set<string>();
   const newWorkouts: WorkoutData[] = [];
   let duplicateCount = 0;
 
   for (const workout of incoming) {
-    if (existingIds.has(workout.id)) {
+    if (existingIds.has(workout.id) || batchIds.has(workout.id)) {
       duplicateCount++;
     } else {
       newWorkouts.push(workout);
-      // Add to set to prevent duplicates within same batch
-      existingIds.add(workout.id);
+      // Add to batch set to prevent duplicates within same batch
+      // (don't modify existingIds - that would cause memory leak)
+      batchIds.add(workout.id);
     }
   }
 

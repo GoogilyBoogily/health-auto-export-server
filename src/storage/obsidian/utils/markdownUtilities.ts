@@ -5,7 +5,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { parse as parseYaml, Scalar, stringify as stringifyYaml } from 'yaml';
 
 import { logger } from '../../../utils/logger';
 import { TRACKING_BODY_TEMPLATES, TRACKING_PATHS } from '../constants';
@@ -44,10 +44,11 @@ export function getTrackingFilePath(
     month = m;
     dateKey = date;
   } else {
-    // For Date objects or ISO strings with time, use getDateKey
+    // For Date objects or ISO strings with time, use UTC methods
+    // to ensure consistent file paths regardless of server timezone
     const d = new Date(date);
-    year = d.getFullYear();
-    month = String(d.getMonth() + 1).padStart(2, '0');
+    year = d.getUTCFullYear();
+    month = String(d.getUTCMonth() + 1).padStart(2, '0');
     dateKey = getDateKey(d);
   }
 
@@ -120,11 +121,20 @@ export async function readOrCreateMarkdownFile(
 }
 
 /**
+ * ISO 8601 timestamp pattern with timezone offset (e.g., 2026-01-10T04:40:59-06:00)
+ * The colon in the timezone offset can cause YAML parsing issues if not quoted.
+ */
+const ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/;
+
+/**
  * Serialize frontmatter and body to markdown string.
  */
 export function serializeMarkdown(frontmatter: ObsidianFrontmatter, body: string): string {
+  // Prepare frontmatter to ensure ISO timestamps are double-quoted
+  const preparedFrontmatter = prepareForYaml(frontmatter);
+
   // Custom YAML options for consistent formatting
-  const yamlContent = stringifyYaml(frontmatter, {
+  const yamlContent = stringifyYaml(preparedFrontmatter, {
     doubleQuotedAsJSON: false,
     indent: 2,
     lineWidth: 0, // Disable line wrapping
@@ -162,4 +172,30 @@ export async function writeMarkdownFile(
     }
     throw error;
   }
+}
+
+/**
+ * Recursively prepare an object for YAML serialization by wrapping ISO timestamps
+ * in Scalar objects with QUOTE_DOUBLE type to ensure proper quoting.
+ */
+function prepareForYaml(value: unknown): unknown {
+  if (typeof value === 'string' && ISO_TIMESTAMP_PATTERN.test(value)) {
+    const scalar = new Scalar(value);
+    scalar.type = Scalar.QUOTE_DOUBLE;
+    return scalar;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => prepareForYaml(item));
+  }
+
+  if (value !== null && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [key, value_] of Object.entries(value)) {
+      result[key] = prepareForYaml(value_);
+    }
+    return result;
+  }
+
+  return value;
 }

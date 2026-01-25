@@ -23,6 +23,7 @@ const HEALTH_METRICS = new Set<string>([
   MetricName.STEP_COUNT,
   MetricName.VO2_MAX,
   MetricName.WALKING_HEART_RATE,
+  MetricName.WALKING_HEART_RATE_AVERAGE,
   MetricName.WALKING_RUNNING_DISTANCE,
 ]);
 
@@ -137,7 +138,8 @@ export function createHealthFrontmatter(
         break;
       }
 
-      case MetricName.WALKING_HEART_RATE: {
+      case MetricName.WALKING_HEART_RATE:
+      case MetricName.WALKING_HEART_RATE_AVERAGE: {
         const walkingHr = metrics as BaseMetric[];
         // Use the most recent value
         const lastWalkingHr = walkingHr.at(-1);

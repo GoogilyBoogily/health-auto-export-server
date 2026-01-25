@@ -50,18 +50,27 @@ export interface StoredWorkout {
     qty: number;
     source: string;
     units: string;
-  };
+  }[];
   activeEnergyBurned?: {
-    date: Date;
     qty: number;
-    source: string;
+    units: string;
+    date?: Date;
+    source?: string;
+  };
+  avgHeartRate?: {
+    qty: number;
     units: string;
   };
   distance?: {
-    date: Date;
     qty: number;
-    source: string;
     units: string;
+    date?: Date;
+    source?: string;
+  };
+  heartRate?: {
+    avg?: { qty: number; units: string };
+    max?: { qty: number; units: string };
+    min?: { qty: number; units: string };
   };
   heartRateData?: {
     Avg: number;
@@ -80,15 +89,26 @@ export interface StoredWorkout {
     units: string;
   }[];
   humidity?: {
-    date: Date;
     qty: number;
-    source: string;
     units: string;
+    date?: Date;
+    source?: string;
   };
   intensity?: {
-    date: Date;
     qty: number;
-    source: string;
+    units: string;
+    date?: Date;
+    source?: string;
+  };
+  isIndoor?: boolean;
+  location?: string;
+  maxHeartRate?: {
+    qty: number;
+    units: string;
+  };
+  metadata?: Record<string, unknown>;
+  stepCadence?: {
+    qty: number;
     units: string;
   };
   stepCount?: {
@@ -98,10 +118,10 @@ export interface StoredWorkout {
     units: string;
   }[];
   temperature?: {
-    date: Date;
     qty: number;
-    source: string;
     units: string;
+    date?: Date;
+    source?: string;
   };
 }
 

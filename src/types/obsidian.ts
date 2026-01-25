@@ -35,36 +35,34 @@ export interface MarkdownFile {
   frontmatter: ObsidianFrontmatter;
 }
 
-export interface NapSession {
-  duration: number; // hours
-  endTime: string; // HH:MM
-  startTime: string; // HH:MM
-}
+export type ObsidianFrontmatter = HealthFrontmatter | SleepFrontmatter | WorkoutFrontmatter;
 
 // ===== WORKOUT TRACKING =====
 
-export type ObsidianFrontmatter = HealthFrontmatter | SleepFrontmatter | WorkoutFrontmatter;
-
 export interface SleepFrontmatter {
   date: string; // YYYY-MM-DD
-  monthKey: string; // YYYY-MM
-  type: 'sleep';
-  weekKey: string; // YYYY-WXX
   asleepDuration?: number; // hours
   awakeHours?: number;
   coreHours?: number;
   deepHours?: number;
   inBedDuration?: number; // hours
-  napCount?: number;
-  napDuration?: number; // hours
-  napSessions?: NapSession[];
   remHours?: number;
   sleepEfficiency?: number; // percentage
-  sleepEnd?: string; // HH:MM
+  sleepEnd?: string; // ISO timestamp with timezone
   sleepSegments?: number; // count of sleep stage transitions
-  sleepStart?: string; // HH:MM
-  source?: string;
-  wristTemp?: number; // wrist temperature in degrees
+  sleepStages?: SleepStageEntry[];
+  sleepStart?: string; // ISO timestamp with timezone
+}
+
+/**
+ * Individual sleep stage entry for frontmatter output.
+ * Each entry represents a single sleep stage with ISO timestamps.
+ */
+export interface SleepStageEntry {
+  duration: number; // hours
+  endTime: string; // ISO timestamp with timezone (e.g., "2025-12-29T21:53:36-06:00")
+  stage: 'awake' | 'core' | 'deep' | 'rem';
+  startTime: string; // ISO timestamp with timezone
 }
 
 // ===== COMMON TYPES =====
@@ -81,9 +79,12 @@ export interface WorkoutEntry {
   activeEnergy?: number; // kcal
   avgHeartRate?: number;
   distance?: number; // km or mi
+  isIndoor?: boolean;
+  location?: string; // e.g., "Indoor", "Outdoor"
   maxHeartRate?: number;
   minHeartRate?: number;
   restingEnergy?: number;
+  stepCadence?: number; // steps per minute
   stepCount?: number;
 }
 

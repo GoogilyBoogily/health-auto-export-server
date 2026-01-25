@@ -9,6 +9,16 @@ export interface IHeartRate extends IMeasurement {
   Min: number;
 }
 
+/**
+ * Heart rate summary with nested max/avg/min structure.
+ * Used for pre-computed heart rate statistics.
+ */
+export interface IHeartRateSummary {
+  avg?: ISimpleMeasurement;
+  max?: ISimpleMeasurement;
+  min?: ISimpleMeasurement;
+}
+
 export interface ILocation {
   latitude: number;
   longitude: number;
@@ -41,20 +51,36 @@ export interface IRoute {
   workoutId: string;
 }
 
+/**
+ * Simple measurement with only qty and units (no date/source).
+ * Used for pre-computed scalar values like maxHeartRate, avgHeartRate, stepCadence.
+ */
+export interface ISimpleMeasurement {
+  qty: number;
+  units: string;
+}
+
 export interface WorkoutData {
   duration: number;
   end: Date;
   id: string;
   name: string;
   start: Date;
-  activeEnergy?: IQuantityMetric;
-  activeEnergyBurned?: IMeasurement;
-  distance?: IMeasurement;
+  activeEnergy?: IQuantityMetric[];
+  activeEnergyBurned?: IMeasurement | ISimpleMeasurement;
+  avgHeartRate?: ISimpleMeasurement;
+  distance?: IMeasurement | ISimpleMeasurement;
+  heartRate?: IHeartRateSummary;
   heartRateData?: IHeartRate[];
   heartRateRecovery?: IHeartRate[];
-  humidity?: IMeasurement;
-  intensity?: IMeasurement;
+  humidity?: IMeasurement | ISimpleMeasurement;
+  intensity?: IMeasurement | ISimpleMeasurement;
+  isIndoor?: boolean;
+  location?: string;
+  maxHeartRate?: ISimpleMeasurement;
+  metadata?: Record<string, unknown>;
   route?: ILocation[];
+  stepCadence?: ISimpleMeasurement;
   stepCount?: IQuantityMetric[];
-  temperature?: IMeasurement;
+  temperature?: IMeasurement | ISimpleMeasurement;
 }

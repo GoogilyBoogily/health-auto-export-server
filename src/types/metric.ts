@@ -54,7 +54,19 @@ export interface SleepMetric extends MetricCommon {
   units: string;
   asleep?: number;
   segmentCount?: number;
+  segments?: SleepSegment[];
   totalSleep?: number;
+}
+
+/**
+ * Processed sleep segment with typed stage and Date objects.
+ * Used for preserving individual sleep stages in the output.
+ */
+export interface SleepSegment {
+  duration: number; // hours
+  endTime: Date;
+  stage: SleepStage;
+  startTime: Date;
 }
 
 /**
@@ -68,6 +80,11 @@ export interface SleepSegmentRaw {
   value: 'Awake' | 'Core' | 'Deep' | 'REM';
   source?: string;
 }
+
+/**
+ * Lowercase sleep stage types for output formatting.
+ */
+export type SleepStage = 'awake' | 'core' | 'deep' | 'rem';
 
 /**
  * Sleep stage value types from Health Auto Export.
