@@ -4,8 +4,16 @@
  */
 
 import { MetricName } from '../types';
-import { debugMetricMapping, debugSleepAggregation, isDebugEnabled } from '../utils/debugLogger';
-import { logger } from '../utils/logger';
+import {
+  debugInvalidDate,
+  debugMetricMapping,
+  debugSleepAggregation,
+  debugTypeMismatch,
+  debugUnknownSleepStage,
+  debugValidationSummary,
+  isDebugEnabled,
+} from '../utils/debugLogger';
+import { Logger } from '../utils/logger';
 
 import type {
   BaseMetric,
@@ -17,16 +25,183 @@ import type {
   SleepSegment,
   SleepSegmentRaw,
   SleepStage,
+  SleepStageValue,
+  WristTemperatureMetric,
 } from '../types';
+import type { ValidationStats } from '../utils/debugLogger';
 
 // Gap threshold for grouping sleep segments into sessions (in minutes)
 const SESSION_GAP_THRESHOLD_MINUTES = 30;
 
+// Valid sleep stage values from Health Auto Export
+const VALID_SLEEP_STAGES = ['Awake', 'Core', 'Deep', 'REM'] as const;
+const VALID_SLEEP_STAGES_SET = new Set<string>(VALID_SLEEP_STAGES);
+
+/**
+ * Request-scoped context for tracking validation stats.
+ * Prevents race conditions from module-level mutable state.
+ */
+export interface MappingContext {
+  stats: ValidationStats;
+  logger?: Logger;
+}
+
+/**
+ * Create a new mapping context for a request.
+ */
+export function createMappingContext(logger?: Logger): MappingContext {
+  return {
+    logger,
+    stats: {
+      invalidDates: 0,
+      processedRecords: 0,
+      skippedRecords: 0,
+      typeMismatches: 0,
+      unknownStages: 0,
+    },
+  };
+}
+
+/**
+ * Flush validation stats and log summary if debug is enabled.
+ */
+export function flushValidationStats(context: MappingContext): ValidationStats {
+  const stats = { ...context.stats };
+  if (isDebugEnabled() && context.logger) {
+    debugValidationSummary(context.logger, stats);
+  }
+  return stats;
+}
+
+/**
+ * Log validation warning if there were data quality issues.
+ * Called after processing to surface issues at WARN level.
+ */
+export function logValidationWarning(context: MappingContext): void {
+  const { logger, stats } = context;
+  if (!logger) return;
+
+  const hasIssues = stats.invalidDates > 0 || stats.typeMismatches > 0 || stats.unknownStages > 0;
+
+  if (hasIssues && stats.skippedRecords > 0) {
+    const issues: string[] = [];
+    if (stats.invalidDates > 0) issues.push(`${String(stats.invalidDates)} invalid dates`);
+    if (stats.typeMismatches > 0) issues.push(`${String(stats.typeMismatches)} type mismatches`);
+    if (stats.unknownStages > 0) issues.push(`${String(stats.unknownStages)} unknown sleep stages`);
+
+    logger.warn(
+      `Data quality issues: ${String(stats.skippedRecords)}/${String(stats.processedRecords + stats.skippedRecords)} records skipped`,
+      {
+        details: issues.join(', '),
+        validationStats: stats,
+      },
+    );
+  }
+}
+
+/**
+ * Check if an object has all required fields defined (not undefined or null).
+ */
+function hasRequiredFields(object: unknown, fields: string[]): boolean {
+  if (!object || typeof object !== 'object') return false;
+  const record = object as Record<string, unknown>;
+  return fields.every(
+    (field) => field in record && record[field] !== undefined && record[field] !== null,
+  );
+}
+
+/**
+ * Validate base metric data has required fields and valid date.
+ */
+function isValidBaseMetricData(data: unknown, context: MappingContext): data is BaseMetric {
+  if (!hasRequiredFields(data, ['date', 'qty'])) {
+    context.stats.typeMismatches++;
+    context.stats.skippedRecords++;
+    debugTypeMismatch(context.logger, 'base_metric', ['date', 'qty'], data);
+    return false;
+  }
+
+  const record = data as { date: unknown };
+  const date = new Date(record.date as Date | string);
+  if (!isValidDate(date)) {
+    context.stats.invalidDates++;
+    context.stats.skippedRecords++;
+    debugInvalidDate(context.logger, record.date, 'base_metric');
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Validate blood pressure data has required fields and valid date.
+ */
+function isValidBloodPressureData(
+  data: unknown,
+  context: MappingContext,
+): data is BloodPressureMetric {
+  if (!hasRequiredFields(data, ['date', 'systolic', 'diastolic'])) {
+    context.stats.typeMismatches++;
+    context.stats.skippedRecords++;
+    debugTypeMismatch(context.logger, 'blood_pressure', ['date', 'systolic', 'diastolic'], data);
+    return false;
+  }
+
+  const record = data as { date: unknown };
+  const date = new Date(record.date as Date | string);
+  if (!isValidDate(date)) {
+    context.stats.invalidDates++;
+    context.stats.skippedRecords++;
+    debugInvalidDate(context.logger, record.date, 'blood_pressure');
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Check if a Date object is valid (not NaN).
+ */
+function isValidDate(date: Date): boolean {
+  return !Number.isNaN(date.getTime());
+}
+
+/**
+ * Validate heart rate data has required fields and valid date.
+ */
+function isValidHeartRateData(data: unknown, context: MappingContext): data is HeartRateMetric {
+  if (!hasRequiredFields(data, ['date', 'Avg', 'Max', 'Min'])) {
+    context.stats.typeMismatches++;
+    context.stats.skippedRecords++;
+    debugTypeMismatch(context.logger, 'heart_rate', ['date', 'Avg', 'Max', 'Min'], data);
+    return false;
+  }
+
+  const record = data as { date: unknown };
+  const date = new Date(record.date as Date | string);
+  if (!isValidDate(date)) {
+    context.stats.invalidDates++;
+    context.stats.skippedRecords++;
+    debugInvalidDate(context.logger, record.date, 'heart_rate');
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Check if a string value is a valid sleep stage.
+ */
+function isValidSleepStage(value: unknown): value is SleepStageValue {
+  return typeof value === 'string' && VALID_SLEEP_STAGES_SET.has(value);
+}
+
 /**
  * Convert uppercase sleep stage value to lowercase.
+ * Only accepts validated SleepStageValue inputs.
  */
-function toLowercaseStage(value: 'Awake' | 'Core' | 'Deep' | 'REM'): SleepStage {
-  const stageMap: Record<string, SleepStage> = {
+function toLowercaseStage(value: SleepStageValue): SleepStage {
+  const stageMap: Record<SleepStageValue, SleepStage> = {
     Awake: 'awake',
     Core: 'core',
     Deep: 'deep',
@@ -35,37 +210,70 @@ function toLowercaseStage(value: 'Awake' | 'Core' | 'Deep' | 'REM'): SleepStage 
   return stageMap[value];
 }
 
+/**
+ * Map a single metric data object to typed metric objects.
+ * Uses request-scoped context for validation tracking.
+ */
 export const mapMetric = (
   metric: MetricData,
+  context: MappingContext = createMappingContext(),
 ): (BloodPressureMetric | HeartRateMetric | Metric | SleepMetric)[] => {
   // Cast to MetricName for switch comparison - unknown strings handled by default case
   const metricName = metric.name as MetricName;
   let result: (BloodPressureMetric | HeartRateMetric | Metric | SleepMetric)[];
 
   switch (metricName) {
+    case MetricName.APPLE_SLEEPING_WRIST_TEMPERATURE: {
+      // Wrist temperature needs end date for accurate night attribution
+      const wristTemporaryData = metric.data as (BaseMetric & { end?: string })[];
+      result = wristTemporaryData
+        .filter((m) => isValidBaseMetricData(m, context))
+        .map((measurement): WristTemperatureMetric => {
+          context.stats.processedRecords++;
+          return {
+            date: new Date(measurement.date),
+            endDate: measurement.end ? new Date(measurement.end) : new Date(measurement.date),
+            metadata: measurement.metadata,
+            qty: measurement.qty,
+            source: measurement.source,
+            units: metric.units,
+          };
+        });
+      break;
+    }
     case MetricName.BLOOD_PRESSURE: {
-      const bpData = metric.data as BloodPressureMetric[];
-      result = bpData.map((measurement) => ({
-        date: new Date(measurement.date),
-        diastolic: measurement.diastolic,
-        metadata: measurement.metadata,
-        source: measurement.source,
-        systolic: measurement.systolic,
-        units: metric.units,
-      }));
+      const rawData = metric.data as unknown[];
+      result = rawData
+        .filter((m): m is BloodPressureMetric => isValidBloodPressureData(m, context))
+        .map((measurement) => {
+          context.stats.processedRecords++;
+          return {
+            date: new Date(measurement.date),
+            diastolic: measurement.diastolic,
+            metadata: measurement.metadata,
+            source: measurement.source,
+            systolic: measurement.systolic,
+            units: metric.units,
+          };
+        });
       break;
     }
     case MetricName.HEART_RATE: {
-      const hrData = metric.data as HeartRateMetric[];
-      result = hrData.map((measurement) => ({
-        Avg: measurement.Avg,
-        date: new Date(measurement.date),
-        Max: measurement.Max,
-        metadata: measurement.metadata,
-        Min: measurement.Min,
-        source: measurement.source,
-        units: metric.units,
-      }));
+      const rawData = metric.data as unknown[];
+      result = rawData
+        .filter((m): m is HeartRateMetric => isValidHeartRateData(m, context))
+        .map((measurement) => {
+          context.stats.processedRecords++;
+          return {
+            Avg: measurement.Avg,
+            date: new Date(measurement.date),
+            Max: measurement.Max,
+            metadata: measurement.metadata,
+            Min: measurement.Min,
+            source: measurement.source,
+            units: metric.units,
+          };
+        });
       break;
     }
     case MetricName.SLEEP_ANALYSIS: {
@@ -73,7 +281,7 @@ export const mapMetric = (
 
       // Detect format: segment data has 'value' and 'startDate' fields
       if (isSegmentFormat(rawData)) {
-        result = aggregateSegments(rawData as SleepSegmentRaw[], metric.units);
+        result = aggregateSegments(rawData as SleepSegmentRaw[], metric.units, context);
         break;
       }
 
@@ -99,21 +307,24 @@ export const mapMetric = (
       break;
     }
     default: {
-      const baseData = metric.data as BaseMetric[];
-      result = baseData.map((measurement) => ({
-        date: new Date(measurement.date),
-        metadata: measurement.metadata,
-        qty: measurement.qty,
-        source: measurement.source,
-        units: metric.units,
-      }));
+      const rawData = metric.data as unknown[];
+      result = rawData
+        .filter((m): m is BaseMetric => isValidBaseMetricData(m, context))
+        .map((measurement) => {
+          context.stats.processedRecords++;
+          return {
+            date: new Date(measurement.date),
+            metadata: measurement.metadata,
+            qty: measurement.qty,
+            source: measurement.source,
+            units: metric.units,
+          };
+        });
     }
   }
 
   // Debug: Log metric mapping transformation
-  if (isDebugEnabled()) {
-    debugMetricMapping(logger, metric.name, metric.data, result);
-  }
+  debugMetricMapping(context.logger, metric.name, metric.data, result);
 
   return result;
 };
@@ -123,27 +334,20 @@ export const mapMetric = (
  * Groups consecutive segments into sessions based on time gaps,
  * then calculates totals for each session.
  */
-function aggregateSegments(segments: SleepSegmentRaw[], units: string): SleepMetric[] {
+function aggregateSegments(
+  segments: SleepSegmentRaw[],
+  units: string,
+  context: MappingContext,
+): SleepMetric[] {
   if (segments.length === 0) return [];
 
   // Filter out invalid segments before processing
-  const validSegments = segments.filter((seg) => {
-    const isValid = isValidSleepSegment(seg);
-    if (!isValid && isDebugEnabled()) {
-      logger.warn('Skipping invalid sleep segment', {
-        endDate: seg.endDate,
-        qty: seg.qty,
-        startDate: seg.startDate,
-        value: seg.value,
-      });
-    }
-    return isValid;
-  });
+  const validSegments = segments.filter((seg) => isValidSleepSegment(seg, context));
 
   if (validSegments.length === 0) return [];
 
   // Sort by start time (toSorted creates a copy, avoiding mutation)
-  const sorted = [...validSegments].toSorted(
+  const sorted = validSegments.toSorted(
     (a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime(),
   );
 
@@ -167,7 +371,8 @@ function aggregateSegments(segments: SleepSegmentRaw[], units: string): SleepMet
     const asleepHours = totals.Core + totals.Deep + totals.REM;
 
     // Convert raw segments to typed SleepSegment objects
-    const segments: SleepSegment[] = session.map((seg) => ({
+    // Stage is already validated in isValidSleepSegment
+    const mappedSegments: SleepSegment[] = session.map((seg) => ({
       duration: seg.qty, // Already in hours
       endTime: new Date(seg.endDate),
       stage: toLowercaseStage(seg.value),
@@ -184,7 +389,7 @@ function aggregateSegments(segments: SleepSegmentRaw[], units: string): SleepMet
       inBedStart: sleepStart,
       rem: totals.REM,
       segmentCount: session.length,
-      segments,
+      segments: mappedSegments,
       sleepEnd,
       sleepStart,
       source: first.source,
@@ -194,9 +399,7 @@ function aggregateSegments(segments: SleepSegmentRaw[], units: string): SleepMet
   });
 
   // Debug: Log sleep segment aggregation details
-  if (isDebugEnabled()) {
-    debugSleepAggregation(logger, segments, sessions, result);
-  }
+  debugSleepAggregation(context.logger, segments, sessions, result);
 
   return result;
 }
@@ -250,20 +453,44 @@ function isSegmentFormat(data: unknown[]): boolean {
 }
 
 /**
- * Validate a sleep segment has valid duration and time range.
+ * Validate a sleep segment has valid duration, time range, and stage value.
  */
-function isValidSleepSegment(segment: SleepSegmentRaw): boolean {
+function isValidSleepSegment(segment: SleepSegmentRaw, context: MappingContext): boolean {
   // Duration must be positive
   if (segment.qty <= 0) {
+    context.stats.skippedRecords++;
+    return false;
+  }
+
+  // Validate sleep stage value
+  if (!isValidSleepStage(segment.value)) {
+    context.stats.unknownStages++;
+    context.stats.skippedRecords++;
+    debugUnknownSleepStage(context.logger, segment.value, [...VALID_SLEEP_STAGES], segment);
+    return false;
+  }
+
+  // Check for invalid dates (NaN)
+  const startTime = new Date(segment.startDate).getTime();
+  const endTime = new Date(segment.endDate).getTime();
+
+  if (Number.isNaN(startTime) || Number.isNaN(endTime)) {
+    context.stats.invalidDates++;
+    context.stats.skippedRecords++;
+    debugInvalidDate(
+      context.logger,
+      { endDate: segment.endDate, startDate: segment.startDate },
+      'sleep_segment',
+    );
     return false;
   }
 
   // End time must be after start time
-  const startTime = new Date(segment.startDate).getTime();
-  const endTime = new Date(segment.endDate).getTime();
   if (endTime <= startTime) {
+    context.stats.skippedRecords++;
     return false;
   }
 
+  context.stats.processedRecords++;
   return true;
 }

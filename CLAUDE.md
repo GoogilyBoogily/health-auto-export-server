@@ -113,6 +113,11 @@ Enable verbose debug logging by setting `DEBUG_LOGGING=true`. This provides deta
 - `TRANSFORM` - Data mapping and transformation (metric mapping, sleep aggregation)
 - `DEDUP` - Deduplication operations (what was filtered, counts)
 - `STORAGE` - File operations (paths, frontmatter being written)
+- `DATA_VALIDATION` - Runtime data quality issues:
+  - Invalid dates (NaN after parsing)
+  - Unknown sleep stage values
+  - Missing required fields on metrics (type mismatches)
+  - Date boundary cases (UTC vs local date differences near midnight)
 
 **Example usage:**
 ```bash

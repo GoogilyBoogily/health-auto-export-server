@@ -5,7 +5,6 @@
 export type {
   HealthFrontmatter,
   MarkdownFile,
-  NapSession,
   ObsidianFrontmatter,
   SleepFrontmatter,
   TrackingType,

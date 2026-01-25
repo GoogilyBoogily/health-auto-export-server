@@ -52,6 +52,7 @@ export interface SleepFrontmatter {
   sleepSegments?: number; // count of sleep stage transitions
   sleepStages?: SleepStageEntry[];
   sleepStart?: string; // ISO timestamp with timezone
+  wristTemperature?: number; // Apple Watch sleeping wrist temperature (°F)
 }
 
 /**

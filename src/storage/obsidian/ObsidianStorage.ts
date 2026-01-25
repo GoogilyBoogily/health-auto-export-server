@@ -22,10 +22,10 @@ import type {
   Metric,
   SaveResult,
   SleepFrontmatter,
-  SleepMetric,
   WorkoutData,
   WorkoutFrontmatter,
 } from '../../types';
+import type { SleepDateData } from './formatters/sleep';
 
 export class ObsidianStorage {
   private vaultPath: string;
@@ -215,7 +215,7 @@ export class ObsidianStorage {
 
   private async saveSleepForDate(
     dateKey: string,
-    sleepEntries: Metric[],
+    sleepData: SleepDateData,
   ): Promise<{ isNew: boolean }> {
     const filePath = getTrackingFilePath(this.vaultPath, 'sleep', dateKey);
 
@@ -223,7 +223,8 @@ export class ObsidianStorage {
     if (isDebugEnabled()) {
       debugStorage(logger, 'Writing sleep file', {
         data: {
-          entriesCount: sleepEntries.length,
+          entriesCount: sleepData.sleepMetrics.length,
+          wristTemperature: sleepData.wristTemperature,
         },
         filePath,
         fileType: 'sleep',
@@ -234,10 +235,9 @@ export class ObsidianStorage {
       const existing = await readMarkdownFile(filePath);
       const isNew = !existing?.frontmatter;
 
-      // Cast to SleepMetric[] - we know these are sleep metrics
       const frontmatter = createSleepFrontmatter(
         dateKey,
-        sleepEntries as SleepMetric[],
+        sleepData,
         existing?.frontmatter as SleepFrontmatter | undefined,
       );
       const body = existing?.body ?? getDefaultBody('sleep', dateKey);
@@ -275,9 +275,9 @@ export class ObsidianStorage {
     let totalUpdated = 0;
     const errors: string[] = [];
 
-    for (const [dateKey, sleepEntries] of byDate) {
+    for (const [dateKey, sleepData] of byDate) {
       try {
-        const result = await this.saveSleepForDate(dateKey, sleepEntries);
+        const result = await this.saveSleepForDate(dateKey, sleepData);
         if (result.isNew) {
           totalSaved++;
         } else {

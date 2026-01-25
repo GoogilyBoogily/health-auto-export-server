@@ -1,4 +1,7 @@
-import { getDateKey } from '../storage/fileHelpers';
+import { getDateKey as getUtcDateKey } from '../storage/fileHelpers';
+import { getDateKey as getLocalDateKey } from '../storage/obsidian/utils/dateUtilities';
+import { debugDateBoundary, isDebugEnabled } from './debugLogger';
+import { logger } from './logger';
 
 import type {
   Metric,
@@ -72,15 +75,26 @@ export function createMetricHash(metric: Metric): string {
 
 /**
  * Extract unique date keys from metrics.
- * Returns dates in YYYY-MM-DD format.
+ * Returns dates in YYYY-MM-DD format (UTC).
+ * When DEBUG_LOGGING=true, logs info when UTC and local dates differ (near midnight boundary).
  */
 export function extractDatesFromMetrics(metricsByType: Record<string, Metric[]>): string[] {
   const dates = new Set<string>();
+  const debugEnabled = isDebugEnabled(); // Hoist check outside loops for performance
 
   for (const metrics of Object.values(metricsByType)) {
     for (const metric of metrics) {
-      const dateKey = getDateKey((metric as MetricCommon).date);
-      dates.add(dateKey);
+      const metricDate = (metric as MetricCommon).date;
+      const utcKey = getUtcDateKey(metricDate);
+      dates.add(utcKey);
+
+      // Log info when UTC and local dates differ (near midnight boundary)
+      if (debugEnabled) {
+        const localKey = getLocalDateKey(metricDate);
+        if (utcKey !== localKey) {
+          debugDateBoundary(logger, metricDate, utcKey, localKey, 'extractDatesFromMetrics');
+        }
+      }
     }
   }
 
@@ -89,14 +103,24 @@ export function extractDatesFromMetrics(metricsByType: Record<string, Metric[]>)
 
 /**
  * Extract unique date keys from workouts.
- * Returns dates in YYYY-MM-DD format based on workout start time.
+ * Returns dates in YYYY-MM-DD format (UTC) based on workout start time.
+ * When DEBUG_LOGGING=true, logs info when UTC and local dates differ (near midnight boundary).
  */
 export function extractDatesFromWorkouts(workouts: WorkoutData[]): string[] {
   const dates = new Set<string>();
+  const debugEnabled = isDebugEnabled(); // Hoist check outside loops for performance
 
   for (const workout of workouts) {
-    const dateKey = getDateKey(workout.start);
-    dates.add(dateKey);
+    const utcKey = getUtcDateKey(workout.start);
+    dates.add(utcKey);
+
+    // Log info when UTC and local dates differ (near midnight boundary)
+    if (debugEnabled) {
+      const localKey = getLocalDateKey(workout.start);
+      if (utcKey !== localKey) {
+        debugDateBoundary(logger, workout.start, utcKey, localKey, 'extractDatesFromWorkouts');
+      }
+    }
   }
 
   return [...dates];

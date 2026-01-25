@@ -19,6 +19,7 @@ export type {
   SleepSegmentRaw,
   SleepStage,
   SleepStageValue,
+  WristTemperatureMetric,
 } from './metric';
 
 // Metric name enum

@@ -1,4 +1,9 @@
-import { mapMetric } from '../mappers';
+import {
+  createMappingContext,
+  flushValidationStats,
+  logValidationWarning,
+  mapMetric,
+} from '../mappers';
 import { cacheStorage, getObsidianStorage } from '../storage';
 import { debugDedup, debugLog, debugStorage, isDebugEnabled } from '../utils/debugLogger';
 import { extractDatesFromMetrics, filterDuplicateMetrics } from '../utils/deduplication';
@@ -77,14 +82,26 @@ export const saveMetrics = async (
       });
     }
 
+    // Create request-scoped context for validation tracking
+    const mappingContext = createMappingContext(log);
+
     // Group metrics by type and map the data
     const metricsByType: Record<string, Metric[]> = {};
     for (const metric of metricsData) {
-      const mappedMetrics = mapMetric(metric);
+      const mappedMetrics = mapMetric(metric, mappingContext);
       const key = metric.name;
       metricsByType[key] ??= [];
       metricsByType[key].push(...mappedMetrics);
     }
+
+    // Flush validation stats and log warnings for data quality issues
+    const validationStats = flushValidationStats(mappingContext);
+    logValidationWarning(mappingContext);
+
+    log?.debug('Validation complete', {
+      processed: validationStats.processedRecords,
+      skipped: validationStats.skippedRecords,
+    });
 
     // Debug: Log transformed metrics structure
     if (log && isDebugEnabled()) {

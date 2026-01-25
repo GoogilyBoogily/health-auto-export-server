@@ -23,7 +23,12 @@ export interface HeartRateMetric extends MetricCommon {
   units: string;
 }
 
-export type Metric = BaseMetric | BloodPressureMetric | HeartRateMetric | SleepMetric;
+export type Metric =
+  | BaseMetric
+  | BloodPressureMetric
+  | HeartRateMetric
+  | SleepMetric
+  | WristTemperatureMetric;
 
 /**
  * Common fields shared by all metric types.
@@ -90,3 +95,13 @@ export type SleepStage = 'awake' | 'core' | 'deep' | 'rem';
  * Sleep stage value types from Health Auto Export.
  */
 export type SleepStageValue = 'Awake' | 'Core' | 'Deep' | 'REM';
+
+/**
+ * Wrist temperature metric from Apple Watch during sleep.
+ * Includes end date for accurate night attribution.
+ */
+export interface WristTemperatureMetric extends MetricCommon {
+  endDate: Date; // End of measurement period (morning after sleep)
+  qty: number;
+  units: string;
+}
