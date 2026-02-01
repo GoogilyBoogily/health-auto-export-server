@@ -17,12 +17,12 @@ import { logger } from './utils/logger';
  * Returns validated config values.
  */
 function validateEnv(): { cacheRetentionDays: number; obsidianVaultPath: string } {
-  const writeToken = process.env.WRITE_TOKEN;
-  if (!writeToken) {
-    throw new Error('WRITE_TOKEN environment variable is required');
+  const apiToken = process.env.API_TOKEN;
+  if (!apiToken) {
+    throw new Error('API_TOKEN environment variable is required');
   }
-  if (!writeToken.startsWith('sk-')) {
-    throw new Error('WRITE_TOKEN must start with "sk-"');
+  if (!apiToken.startsWith('sk-')) {
+    throw new Error('API_TOKEN must start with "sk-"');
   }
 
   const obsidianVaultPath = process.env.OBSIDIAN_VAULT_PATH;

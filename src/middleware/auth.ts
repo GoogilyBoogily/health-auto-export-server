@@ -25,21 +25,21 @@ function isValidToken(provided: string, expected: string): boolean {
 
 /**
  * Authentication middleware for write access.
- * Defense-in-depth: validates WRITE_TOKEN is configured even though
+ * Defense-in-depth: validates API_TOKEN is configured even though
  * app.ts validates at startup - prevents security issues if middleware
  * is used before environment validation.
  */
 export const requireWriteAuth = (req: Request, res: Response, next: NextFunction) => {
   const token = req.headers['api-key'] as string;
-  const writeToken = process.env.WRITE_TOKEN;
+  const apiToken = process.env.API_TOKEN;
 
-  // Fail-safe: ensure WRITE_TOKEN is configured (defense-in-depth)
-  if (!writeToken || writeToken.length === 0) {
-    req.log.error('WRITE_TOKEN not configured - rejecting request');
+  // Fail-safe: ensure API_TOKEN is configured (defense-in-depth)
+  if (!apiToken || apiToken.length === 0) {
+    req.log.error('API_TOKEN not configured - rejecting request');
     return res.status(500).json({ error: 'Server configuration error' });
   }
 
-  if (!token || !token.startsWith('sk-') || !isValidToken(token, writeToken)) {
+  if (!token || !token.startsWith('sk-') || !isValidToken(token, apiToken)) {
     req.log.warn('Write authentication failed', {
       path: req.path,
       reason: getAuthFailureReason(token),

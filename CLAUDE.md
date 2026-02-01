@@ -91,7 +91,7 @@ Key rules:
 ## Environment Variables
 
 ```bash
-WRITE_TOKEN          # Required - API auth token (must start with "sk-")
+API_TOKEN            # Required - API auth token (must start with "sk-")
 OBSIDIAN_VAULT_PATH  # Required - Path to Obsidian vault for Markdown output
 NODE_ENV             # Optional - development|production (default: development)
 DATA_DIR             # Optional - Data directory (default: ./data)

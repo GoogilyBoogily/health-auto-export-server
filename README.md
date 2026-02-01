@@ -118,7 +118,7 @@ Create a `.env` file or run `./create-env.sh` to generate one:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `WRITE_TOKEN` | Yes | - | API authentication token (must start with `sk-`) |
+| `API_TOKEN` | Yes | - | API authentication token (must start with `sk-`) |
 | `NODE_ENV` | No | `development` | Environment mode (`development` or `production`) |
 | `DATA_DIR` | No | `./data` | Directory for storing JSON data files |
 | `PORT` | No | `3001` | Server port |
@@ -147,7 +147,7 @@ Ingests metrics and workouts from Health Auto Export app.
 
 | Header | Required | Description |
 |--------|----------|-------------|
-| `api-key` | Yes | Your `WRITE_TOKEN` value |
+| `api-key` | Yes | Your `API_TOKEN` value |
 | `Content-Type` | Yes | `application/json` |
 
 **Response Codes:**

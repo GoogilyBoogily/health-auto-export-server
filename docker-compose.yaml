@@ -7,10 +7,13 @@ services:
     ports:
       - "3001:3001"
     environment:
-      - NODE_ENV=${NODE_ENV}
+      - NODE_ENV=${NODE_ENV:-production}
       - DATA_DIR=/data
-      - READ_TOKEN=${READ_TOKEN}
-      - WRITE_TOKEN=${WRITE_TOKEN}
+      - API_TOKEN=${API_TOKEN}
+      - OBSIDIAN_VAULT_PATH=/obsidian
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - DEBUG_LOGGING=${DEBUG_LOGGING:-false}
     volumes:
       - ./data:/data
+      - ${OBSIDIAN_VAULT_PATH}:/obsidian
     restart: unless-stopped

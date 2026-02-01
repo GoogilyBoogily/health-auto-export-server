@@ -19,7 +19,7 @@ USER bunjs
 
 EXPOSE 3001
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
   CMD bun -e "fetch('http://localhost:3001/health').then(r => process.exit(r.ok ? 0 : 1))" || exit 1
 
 CMD ["bun", "run", "src/app.ts"]
