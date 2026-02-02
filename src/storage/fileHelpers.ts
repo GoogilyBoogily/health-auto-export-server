@@ -1,12 +1,8 @@
 import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 
+import { FileLockConfig } from '../config';
 import { logger } from '../utils/logger';
-
-// Lock configuration
-const LOCK_RETRY_DELAY_MS = 50;
-const LOCK_MAX_RETRIES = 100; // 5 seconds max wait
-const LOCK_STALE_MS = 30_000; // Consider lock stale after 30 seconds
 
 interface LockContent {
   pid: number;
@@ -27,7 +23,7 @@ export async function acquireLock(filePath: string): Promise<void> {
   const lockPath = `${filePath}.lock`;
   await ensureDirectory(path.dirname(filePath));
 
-  for (let attempt = 0; attempt < LOCK_MAX_RETRIES; attempt++) {
+  for (let attempt = 0; attempt < FileLockConfig.maxRetries; attempt++) {
     try {
       // Try to create lock file exclusively (fails if exists)
       const fd = await fs.open(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
@@ -44,7 +40,7 @@ export async function acquireLock(filePath: string): Promise<void> {
   }
 
   throw new Error(
-    `Failed to acquire lock for ${filePath} after ${String(LOCK_MAX_RETRIES)} attempts`,
+    `Failed to acquire lock for ${filePath} after ${String(FileLockConfig.maxRetries)} attempts`,
   );
 }
 
@@ -198,11 +194,11 @@ async function handleExistingLock(lockPath: string): Promise<void> {
     const stat = await fs.stat(lockPath);
     const age = Date.now() - stat.mtimeMs;
 
-    if (age > LOCK_STALE_MS) {
+    if (age > FileLockConfig.staleTimeoutMs) {
       const action = await checkStaleLock(lockPath, age);
 
       if (action === 'process_alive') {
-        await sleep(LOCK_RETRY_DELAY_MS);
+        await sleep(FileLockConfig.retryDelayMs);
         return;
       }
 
@@ -216,7 +212,7 @@ async function handleExistingLock(lockPath: string): Promise<void> {
   }
 
   // Lock is fresh, wait and retry
-  await sleep(LOCK_RETRY_DELAY_MS);
+  await sleep(FileLockConfig.retryDelayMs);
 }
 
 /**

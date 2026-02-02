@@ -3,6 +3,7 @@ import { Server } from 'node:http';
 import cors from 'cors';
 import express from 'express';
 
+import { AuthConfig, CorsConfig, ServerConfig } from './config';
 import { requireWriteAuth } from './middleware/auth';
 import { rateLimit } from './middleware/rateLimit';
 import { requestLogger } from './middleware/requestLogger';
@@ -17,12 +18,12 @@ import { logger } from './utils/logger';
  * Returns validated config values.
  */
 function validateEnv(): { cacheRetentionDays: number; obsidianVaultPath: string } {
-  const apiToken = process.env.API_TOKEN;
+  const apiToken = process.env[AuthConfig.tokenEnvVar];
   if (!apiToken) {
-    throw new Error('API_TOKEN environment variable is required');
+    throw new Error(`${AuthConfig.tokenEnvVar} environment variable is required`);
   }
-  if (!apiToken.startsWith('sk-')) {
-    throw new Error('API_TOKEN must start with "sk-"');
+  if (!apiToken.startsWith(AuthConfig.tokenPrefix)) {
+    throw new Error(`${AuthConfig.tokenEnvVar} must start with "${AuthConfig.tokenPrefix}"`);
   }
 
   const obsidianVaultPath = process.env.OBSIDIAN_VAULT_PATH;
@@ -45,16 +46,24 @@ function validateEnv(): { cacheRetentionDays: number; obsidianVaultPath: string 
 
 const app = express();
 app.disable('x-powered-by'); // Prevent version disclosure
-const port = Number.parseInt(process.env.PORT ?? '3001', 10);
+const port = ServerConfig.port;
 let server: Server;
 
 // Configure CORS origins from environment variable (comma-separated list)
 // If not set, defaults to '*' (allow all) for development convenience
 // In production, set CORS_ORIGINS to restrict allowed origins
 function getCorsOrigins(): string[] {
-  const corsOriginsEnv = process.env.CORS_ORIGINS;
+  const corsOriginsEnv = process.env[CorsConfig.originsEnvVar];
+  const isProduction = process.env.NODE_ENV === 'production';
 
   if (!corsOriginsEnv || corsOriginsEnv === '*') {
+    // Warn in production if CORS is allowing all origins
+    if (isProduction) {
+      logger.warn(
+        'CORS_ORIGINS not set in production - allowing all origins. ' +
+          'Set CORS_ORIGINS environment variable to restrict allowed origins.',
+      );
+    }
     // Default: allow all origins (development mode)
     return ['*'];
   }
@@ -64,16 +73,16 @@ function getCorsOrigins(): string[] {
 }
 
 const corsOptions = {
-  allowedHeaders: ['Content-Type', 'Authorization', 'api-key'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: CorsConfig.allowedHeaders,
+  methods: CorsConfig.allowedMethods,
   origin: getCorsOrigins(),
 };
 
 app.use(cors(corsOptions));
 
-// Reduced body limit from 200mb to 50mb to mitigate DoS risk
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+// Body size limit (mitigate DoS risk)
+app.use(express.json({ limit: ServerConfig.bodyLimit }));
+app.use(express.urlencoded({ extended: true, limit: ServerConfig.bodyLimit }));
 
 // Add rate limiting (100 requests per minute per IP, excludes /health)
 app.use(rateLimit);
@@ -125,12 +134,12 @@ const gracefulShutdown = (signal: string) => {
     void runShutdownCleanup();
   });
 
-  // Force exit after 10 seconds (unref to not block process exit)
+  // Force exit after timeout (unref to not block process exit)
   setTimeout(() => {
     logger.error('Forced shutdown after timeout');
     // eslint-disable-next-line n/no-process-exit, unicorn/no-process-exit -- Intentional forced shutdown
     process.exit(1);
-  }, 10_000).unref();
+  }, ServerConfig.shutdownTimeoutMs).unref();
 };
 
 // Initialize storage and start server
@@ -143,11 +152,11 @@ try {
   const obsidianStorage = initObsidianStorage(obsidianVaultPath);
   await obsidianStorage.init();
 
-  server = app.listen(port, '0.0.0.0', () => {
+  server = app.listen(port, ServerConfig.host, () => {
     logger.info('Server started', {
       cacheRetentionDays,
       dataDir: process.env.DATA_DIR ?? './data',
-      host: '0.0.0.0',
+      host: ServerConfig.host,
       nodeEnv: process.env.NODE_ENV ?? 'development',
       obsidianVault: obsidianVaultPath,
       port,

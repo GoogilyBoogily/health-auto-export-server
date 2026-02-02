@@ -5,16 +5,15 @@
 
 import { NextFunction, Request, Response } from 'express';
 
-// Default timeout: 2 minutes (large payloads can take time to process)
-const DEFAULT_TIMEOUT_MS = 120_000;
+import { RequestConfig } from '../config';
 
 /**
  * Create a request timeout middleware with configurable timeout.
  *
- * @param timeoutMs - Maximum time allowed for request processing (default: 2 minutes)
+ * @param timeoutMs - Maximum time allowed for request processing (default: from config)
  * @returns Express middleware function
  */
-export function createRequestTimeout(timeoutMs: number = DEFAULT_TIMEOUT_MS) {
+export function createRequestTimeout(timeoutMs: number = RequestConfig.timeoutMs) {
   return (req: Request, res: Response, next: NextFunction) => {
     // Set socket timeout
     req.socket.setTimeout(timeoutMs);
@@ -50,6 +49,6 @@ export function createRequestTimeout(timeoutMs: number = DEFAULT_TIMEOUT_MS) {
 }
 
 /**
- * Default request timeout middleware (2 minutes).
+ * Default request timeout middleware (configured timeout).
  */
 export const requestTimeout = createRequestTimeout();

@@ -3,6 +3,7 @@
  * Transforms workout data into Obsidian workout tracking frontmatter.
  */
 
+import { logger } from '../../../utils/logger';
 import {
   formatTime,
   getDateKey,
@@ -94,6 +95,19 @@ export function createWorkoutFrontmatter(
   if (avgHeartRate !== undefined) frontmatter.avgHeartRate = avgHeartRate;
   if (maxHeartRate !== undefined && maxHeartRate > 0) frontmatter.maxHeartRate = maxHeartRate;
 
+  logger.debugLog('TRANSFORM', 'Workout frontmatter created with merge', {
+    dateKey,
+    existingEntryCount: existing?.workoutEntries.length ?? 0,
+    finalEntryCount: allEntries.length,
+    newWorkoutCount: workouts.length,
+    totals: {
+      activeEnergy: totalActiveEnergy,
+      distance: totalDistance,
+      duration: totalDuration,
+      steps: totalSteps,
+    },
+  });
+
   return frontmatter;
 }
 
@@ -112,6 +126,13 @@ export function groupWorkoutsByDate(workouts: WorkoutData[]): Map<string, Workou
     }
     dateWorkouts.push(workout);
   }
+
+  logger.debugLog('TRANSFORM', 'Workouts grouped by date', {
+    dateKeys: [...byDate.keys()],
+    datesWithWorkouts: byDate.size,
+    totalWorkouts: workouts.length,
+    workoutsPerDate: Object.fromEntries([...byDate.entries()].map(([k, v]) => [k, v.length])),
+  });
 
   return byDate;
 }
@@ -139,29 +160,51 @@ function extractHeartRateValues(workout: WorkoutData): {
   const hrData = workout.heartRateData;
   const hasHrData = hrData && hrData.length > 0;
 
+  // Track which source was used for debug logging
+  let avgSource: string | undefined;
+  let maxSource: string | undefined;
+  let minSource: string | undefined;
+
   // Average heart rate
   if (workout.avgHeartRate?.qty !== undefined) {
     result.avg = Math.round(workout.avgHeartRate.qty);
+    avgSource = 'avgHeartRate field';
   } else if (workout.heartRate?.avg?.qty !== undefined) {
     result.avg = Math.round(workout.heartRate.avg.qty);
+    avgSource = 'heartRate.avg nested';
   } else if (hasHrData) {
     result.avg = Math.round(hrData.reduce((sum, hr) => sum + hr.Avg, 0) / hrData.length);
+    avgSource = 'heartRateData array';
   }
 
   // Max heart rate
   if (workout.maxHeartRate?.qty !== undefined) {
     result.max = Math.round(workout.maxHeartRate.qty);
+    maxSource = 'maxHeartRate field';
   } else if (workout.heartRate?.max?.qty !== undefined) {
     result.max = Math.round(workout.heartRate.max.qty);
+    maxSource = 'heartRate.max nested';
   } else if (hasHrData) {
     result.max = Math.round(Math.max(...hrData.map((hr) => hr.Max)));
+    maxSource = 'heartRateData array';
   }
 
   // Min heart rate
   if (workout.heartRate?.min?.qty !== undefined) {
     result.min = Math.round(workout.heartRate.min.qty);
+    minSource = 'heartRate.min nested';
   } else if (hasHrData) {
     result.min = Math.round(Math.min(...hrData.map((hr) => hr.Min)));
+    minSource = 'heartRateData array';
+  }
+
+  if (result.avg !== undefined || result.max !== undefined) {
+    logger.debugLog('TRANSFORM', 'Heart rate values extracted', {
+      heartRateDataPoints: hrData?.length ?? 0,
+      sources: { avg: avgSource, max: maxSource, min: minSource },
+      values: result,
+      workoutName: workout.name,
+    });
   }
 
   return result;
@@ -226,6 +269,22 @@ function workoutToEntry(workout: WorkoutData): WorkoutEntry {
   if (workout.isIndoor !== undefined) {
     entry.isIndoor = workout.isIndoor;
   }
+
+  logger.debugTransform(
+    'Workout transformed to entry',
+    {
+      durationSeconds: workout.duration,
+      name: workout.name,
+      sourceId: workout.id,
+    },
+    {
+      activeEnergy: entry.activeEnergy,
+      distance: entry.distance,
+      durationMinutes: entry.duration,
+      heartRate: hrValues.avg === undefined ? undefined : hrValues,
+      workoutId: entry.workoutId,
+    },
+  );
 
   return entry;
 }

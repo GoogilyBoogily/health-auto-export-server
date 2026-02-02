@@ -3,17 +3,9 @@
  * Transforms raw metric data from the API into typed metric objects.
  */
 
+import { MetricsConfig } from '../config';
 import { MetricName } from '../types';
-import {
-  debugInvalidDate,
-  debugMetricMapping,
-  debugSleepAggregation,
-  debugTypeMismatch,
-  debugUnknownSleepStage,
-  debugValidationSummary,
-  isDebugEnabled,
-} from '../utils/debugLogger';
-import { Logger } from '../utils/logger';
+import { Logger, ValidationStats } from '../utils/logger';
 
 import type {
   BaseMetric,
@@ -28,14 +20,9 @@ import type {
   SleepStageValue,
   WristTemperatureMetric,
 } from '../types';
-import type { ValidationStats } from '../utils/debugLogger';
-
-// Gap threshold for grouping sleep segments into sessions (in minutes)
-const SESSION_GAP_THRESHOLD_MINUTES = 30;
 
 // Valid sleep stage values from Health Auto Export
-const VALID_SLEEP_STAGES = ['Awake', 'Core', 'Deep', 'REM'] as const;
-const VALID_SLEEP_STAGES_SET = new Set<string>(VALID_SLEEP_STAGES);
+const VALID_SLEEP_STAGES_SET = new Set<string>(MetricsConfig.validSleepStages);
 
 /**
  * Request-scoped context for tracking validation stats.
@@ -63,13 +50,11 @@ export function createMappingContext(logger?: Logger): MappingContext {
 }
 
 /**
- * Flush validation stats and log summary if debug is enabled.
+ * Flush validation stats and log summary.
  */
 export function flushValidationStats(context: MappingContext): ValidationStats {
   const stats = { ...context.stats };
-  if (isDebugEnabled() && context.logger) {
-    debugValidationSummary(context.logger, stats);
-  }
+  context.logger?.debugValidationSummary(stats);
   return stats;
 }
 
@@ -117,7 +102,7 @@ function isValidBaseMetricData(data: unknown, context: MappingContext): data is 
   if (!hasRequiredFields(data, ['date', 'qty'])) {
     context.stats.typeMismatches++;
     context.stats.skippedRecords++;
-    debugTypeMismatch(context.logger, 'base_metric', ['date', 'qty'], data);
+    context.logger?.debugTypeMismatch('base_metric', ['date', 'qty'], data);
     return false;
   }
 
@@ -126,7 +111,7 @@ function isValidBaseMetricData(data: unknown, context: MappingContext): data is 
   if (!isValidDate(date)) {
     context.stats.invalidDates++;
     context.stats.skippedRecords++;
-    debugInvalidDate(context.logger, record.date, 'base_metric');
+    context.logger?.debugInvalidDate(record.date, 'base_metric');
     return false;
   }
 
@@ -143,7 +128,7 @@ function isValidBloodPressureData(
   if (!hasRequiredFields(data, ['date', 'systolic', 'diastolic'])) {
     context.stats.typeMismatches++;
     context.stats.skippedRecords++;
-    debugTypeMismatch(context.logger, 'blood_pressure', ['date', 'systolic', 'diastolic'], data);
+    context.logger?.debugTypeMismatch('blood_pressure', ['date', 'systolic', 'diastolic'], data);
     return false;
   }
 
@@ -152,7 +137,7 @@ function isValidBloodPressureData(
   if (!isValidDate(date)) {
     context.stats.invalidDates++;
     context.stats.skippedRecords++;
-    debugInvalidDate(context.logger, record.date, 'blood_pressure');
+    context.logger?.debugInvalidDate(record.date, 'blood_pressure');
     return false;
   }
 
@@ -173,7 +158,7 @@ function isValidHeartRateData(data: unknown, context: MappingContext): data is H
   if (!hasRequiredFields(data, ['date', 'Avg', 'Max', 'Min'])) {
     context.stats.typeMismatches++;
     context.stats.skippedRecords++;
-    debugTypeMismatch(context.logger, 'heart_rate', ['date', 'Avg', 'Max', 'Min'], data);
+    context.logger?.debugTypeMismatch('heart_rate', ['date', 'Avg', 'Max', 'Min'], data);
     return false;
   }
 
@@ -182,7 +167,7 @@ function isValidHeartRateData(data: unknown, context: MappingContext): data is H
   if (!isValidDate(date)) {
     context.stats.invalidDates++;
     context.stats.skippedRecords++;
-    debugInvalidDate(context.logger, record.date, 'heart_rate');
+    context.logger?.debugInvalidDate(record.date, 'heart_rate');
     return false;
   }
 
@@ -324,7 +309,7 @@ export const mapMetric = (
   }
 
   // Debug: Log metric mapping transformation
-  debugMetricMapping(context.logger, metric.name, metric.data, result);
+  context.logger?.debugMetricMapping(metric.name, metric.data, result);
 
   return result;
 };
@@ -399,14 +384,14 @@ function aggregateSegments(
   });
 
   // Debug: Log sleep segment aggregation details
-  debugSleepAggregation(context.logger, segments, sessions, result);
+  context.logger?.debugSleepAggregation(segments, sessions, result);
 
   return result;
 }
 
 /**
  * Group sleep segments into sessions based on time gaps.
- * A gap of more than SESSION_GAP_THRESHOLD_MINUTES starts a new session.
+ * A gap of more than the configured threshold starts a new session.
  */
 function groupIntoSessions(segments: SleepSegmentRaw[]): SleepSegmentRaw[][] {
   const sessions: SleepSegmentRaw[][] = [];
@@ -425,7 +410,7 @@ function groupIntoSessions(segments: SleepSegmentRaw[]): SleepSegmentRaw[][] {
     const gapMs = currentStart.getTime() - previousEnd.getTime();
     const gapMins = gapMs / (1000 * 60);
 
-    if (gapMins > SESSION_GAP_THRESHOLD_MINUTES) {
+    if (gapMins > MetricsConfig.sessionGapThresholdMinutes) {
       // Gap too large, start new session
       sessions.push(currentSession);
       currentSession = [segment];
@@ -466,7 +451,11 @@ function isValidSleepSegment(segment: SleepSegmentRaw, context: MappingContext):
   if (!isValidSleepStage(segment.value)) {
     context.stats.unknownStages++;
     context.stats.skippedRecords++;
-    debugUnknownSleepStage(context.logger, segment.value, [...VALID_SLEEP_STAGES], segment);
+    context.logger?.debugUnknownSleepStage(
+      segment.value,
+      [...MetricsConfig.validSleepStages],
+      segment,
+    );
     return false;
   }
 
@@ -477,8 +466,7 @@ function isValidSleepSegment(segment: SleepSegmentRaw, context: MappingContext):
   if (Number.isNaN(startTime) || Number.isNaN(endTime)) {
     context.stats.invalidDates++;
     context.stats.skippedRecords++;
-    debugInvalidDate(
-      context.logger,
+    context.logger?.debugInvalidDate(
       { endDate: segment.endDate, startDate: segment.startDate },
       'sleep_segment',
     );

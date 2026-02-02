@@ -128,6 +128,7 @@ const ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{
 
 /**
  * Serialize frontmatter and body to markdown string.
+ * Ensures the output always ends with a newline.
  */
 export function serializeMarkdown(frontmatter: ObsidianFrontmatter, body: string): string {
   // Prepare frontmatter to ensure ISO timestamps are double-quoted
@@ -141,7 +142,10 @@ export function serializeMarkdown(frontmatter: ObsidianFrontmatter, body: string
     singleQuote: false,
   });
 
-  return `---\n${yamlContent}---\n${body}`;
+  // Ensure body ends with a newline
+  const normalizedBody = body.endsWith('\n') ? body : `${body}\n`;
+
+  return `---\n${yamlContent}---\n${normalizedBody}`;
 }
 
 /**

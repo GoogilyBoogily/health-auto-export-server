@@ -46,6 +46,18 @@ export function createHealthFrontmatter(
     weekKey: getWeekKey(date),
   };
 
+  // Log frontmatter creation start
+  const metricTypes = Object.keys(metricsByType);
+  const metricCounts = Object.fromEntries(
+    Object.entries(metricsByType).map(([k, v]) => [k, v.length]),
+  );
+  logger.debugLog('TRANSFORM', 'Health frontmatter creation started', {
+    dateKey,
+    hasExisting: existing !== undefined,
+    metricCounts,
+    metricTypes,
+  });
+
   // Always update date keys in case they need recalculation
   frontmatter.date = dateKey;
   frontmatter.weekKey = getWeekKey(date);
@@ -77,6 +89,15 @@ export function createHealthFrontmatter(
           frontmatter.heartRateMin = Math.round(Math.min(...hrMetrics.map((m) => m.Min)));
           frontmatter.heartRateMax = Math.round(Math.max(...hrMetrics.map((m) => m.Max)));
           frontmatter.heartRateAvg = Math.round(average(hrMetrics.map((m) => m.Avg)) ?? 0);
+
+          // Sample debug logging for heart rate calculation
+          logger.debugLog('TRANSFORM', 'Heart rate metrics processed', {
+            avg: frontmatter.heartRateAvg,
+            dateKey,
+            max: frontmatter.heartRateMax,
+            min: frontmatter.heartRateMin,
+            sampleCount: hrMetrics.length,
+          });
         }
         break;
       }
@@ -169,6 +190,20 @@ export function createHealthFrontmatter(
     }
   }
 
+  // Log final frontmatter fields generated
+  const fieldsSet = Object.keys(frontmatter).filter(
+    (k) => frontmatter[k as keyof HealthFrontmatter] !== undefined,
+  );
+  logger.debugLog('TRANSFORM', 'Health frontmatter completed', {
+    dateKey,
+    fieldsSet,
+    sampleValues: {
+      activeEnergy: frontmatter.activeEnergy,
+      heartRateAvg: frontmatter.heartRateAvg,
+      stepCount: frontmatter.stepCount,
+    },
+  });
+
   return frontmatter;
 }
 
@@ -193,6 +228,15 @@ export function groupHealthMetricsByDate(metricsByType: MetricsByType): Map<stri
       dateMetrics[metricType].push(metric);
     }
   }
+
+  const inputMetricTypes = Object.keys(metricsByType).filter((t) => isHealthMetric(t));
+  const totalInputMetrics = inputMetricTypes.reduce((sum, t) => sum + metricsByType[t].length, 0);
+  logger.debugLog('TRANSFORM', 'Health metrics grouped by date', {
+    dateKeys: [...byDate.keys()],
+    datesWithData: byDate.size,
+    inputMetricTypes,
+    totalInputMetrics,
+  });
 
   return byDate;
 }

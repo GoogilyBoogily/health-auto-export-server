@@ -1,19 +1,14 @@
+import { RetryConfig } from '../config';
 import { cacheStorage, getObsidianStorage } from '../storage';
-import { debugDedup, debugLog, debugStorage, isDebugEnabled } from '../utils/debugLogger';
 import { extractDatesFromWorkouts, filterDuplicateWorkouts } from '../utils/deduplication';
 import { Logger } from '../utils/logger';
 import { withRetry } from '../utils/retry';
 
 import type { IngestData, IngestResponse } from '../types';
 
-// === RETRY CONFIGURATION ===
-const MAX_OBSIDIAN_RETRIES = 3;
-const RETRY_BASE_DELAY_MS = 1000;
-
 // === CLEANUP DEBOUNCING ===
 // Prevents overlapping cleanup runs from concurrent requests
 let cleanupScheduled = false;
-const CLEANUP_DEBOUNCE_MS = 5000;
 
 /**
  * Schedule cache cleanup with debouncing to prevent overlapping runs.
@@ -39,13 +34,12 @@ function scheduleCleanup(log?: Logger): void {
           error: error instanceof Error ? error.message : 'Unknown',
         });
       });
-  }, CLEANUP_DEBOUNCE_MS);
+  }, RetryConfig.cleanupDebounceMs);
 
   // Don't block process exit
   timeout.unref();
 }
 
-/* eslint-disable sonarjs/cognitive-complexity -- Debug logging conditionals add necessary complexity */
 export const saveWorkouts = async (
   ingestData: IngestData,
   log?: Logger,
@@ -69,17 +63,15 @@ export const saveWorkouts = async (
     log?.debug('Processing workouts', { count: workouts.length });
 
     // Debug: Log raw workouts input
-    if (log && isDebugEnabled()) {
-      debugLog(log, 'TRANSFORM', 'Raw workouts input', {
-        workoutsCount: workouts.length,
-        workoutSummary: workouts.map((w) => ({
-          date: w.start,
-          duration: w.duration,
-          name: w.name,
-          workoutId: (w as { id?: string }).id,
-        })),
-      });
-    }
+    log?.debugLog('TRANSFORM', 'Raw workouts input', {
+      workoutsCount: workouts.length,
+      workoutSummary: workouts.map((w) => ({
+        date: w.start,
+        duration: w.duration,
+        name: w.name,
+        workoutId: (w as { id?: string }).id,
+      })),
+    });
 
     // === DEDUPLICATION FLOW ===
 
@@ -96,20 +88,18 @@ export const saveWorkouts = async (
     log?.debug('Deduplication complete', { duplicateCount, newCount });
 
     // Debug: Log detailed deduplication results
-    if (log && isDebugEnabled()) {
-      debugDedup(log, 'Workouts deduplication', {
-        duplicateCount,
-        inputCount: workouts.length,
-        newCount,
+    log?.debugDedup('Workouts deduplication', {
+      duplicateCount,
+      inputCount: workouts.length,
+      newCount,
+    });
+    if (newWorkouts.length > 0) {
+      log?.debugLog('DEDUP', 'New workouts after deduplication', {
+        workouts: newWorkouts.map((w) => ({
+          date: w.start,
+          name: w.name,
+        })),
       });
-      if (newWorkouts.length > 0) {
-        debugLog(log, 'DEDUP', 'New workouts after deduplication', {
-          workouts: newWorkouts.map((w) => ({
-            date: w.start,
-            name: w.name,
-          })),
-        });
-      }
     }
 
     // 4. If all data is duplicates, return early
@@ -127,38 +117,34 @@ export const saveWorkouts = async (
     let obsidianSaved: number;
 
     // Debug: Log what we're about to write to Obsidian
-    if (log && isDebugEnabled()) {
-      debugStorage(log, 'Preparing Obsidian write', {
-        data: newWorkouts.map((w) => ({
-          date: w.start,
-          duration: w.duration,
-          name: w.name,
-        })),
-        fileType: 'workouts',
-      });
-    }
+    log?.debugStorage('Preparing Obsidian write', {
+      data: newWorkouts.map((w) => ({
+        date: w.start,
+        duration: w.duration,
+        name: w.name,
+      })),
+      fileType: 'workouts',
+    });
 
     try {
       const obsidianResult = await withRetry(() => obsidianStorage.saveWorkouts(newWorkouts), {
-        baseDelayMs: RETRY_BASE_DELAY_MS,
+        baseDelayMs: RetryConfig.baseDelayMs,
         log,
-        maxRetries: MAX_OBSIDIAN_RETRIES,
+        maxRetries: RetryConfig.maxRetries,
         operationName: 'Obsidian write',
       });
       obsidianSaved = obsidianResult.saved;
 
       // Debug: Log Obsidian write result
-      if (log && isDebugEnabled()) {
-        debugStorage(log, 'Obsidian write completed', {
-          metadata: { saved: obsidianSaved, updated: obsidianResult.updated },
-        });
-      }
+      log?.debugStorage('Obsidian write completed', {
+        metadata: { saved: obsidianSaved, updated: obsidianResult.updated },
+      });
     } catch (error) {
       // Obsidian failed after all retries - do NOT update cache, return error
       const obsidianError = error instanceof Error ? error.message : 'Unknown Obsidian error';
       log?.error('Obsidian storage failed after all retries, cache not updated', {
         error: obsidianError,
-        retries: MAX_OBSIDIAN_RETRIES,
+        retries: RetryConfig.maxRetries,
       });
 
       timer?.end('error', 'Failed to save workouts to Obsidian', {
@@ -169,7 +155,7 @@ export const saveWorkouts = async (
 
       return {
         workouts: {
-          error: `Obsidian storage failed after ${String(MAX_OBSIDIAN_RETRIES)} attempts: ${obsidianError}`,
+          error: `Obsidian storage failed after ${String(RetryConfig.maxRetries)} attempts: ${obsidianError}`,
           success: false,
         },
       };
@@ -209,4 +195,3 @@ export const saveWorkouts = async (
     return errorResponse;
   }
 };
-/* eslint-enable sonarjs/cognitive-complexity */

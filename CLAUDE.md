@@ -77,6 +77,24 @@ Each Markdown file has YAML frontmatter for Obsidian Dataview queries.
 - Development: Pretty colored output
 - Production: JSON structured logs
 
+## Configuration
+
+All configurable values are centralized in `src/config.ts`. This includes:
+
+- **ServerConfig**: Port, host, body size limit, shutdown timeout
+- **RequestConfig**: Request processing timeout
+- **AuthConfig**: Token prefix, header name, env var name
+- **RateLimitConfig**: Max requests, window duration, skip paths
+- **CorsConfig**: Allowed headers, methods, origins env var
+- **FileLockConfig**: Retry delays, max retries, stale timeout
+- **CacheConfig**: Retention days, max cleanup failures, file patterns
+- **RetryConfig**: Max retries, base delay, cleanup debounce
+- **ObsidianConfig**: Tracking paths, body templates, frontmatter patterns
+- **SleepConfig**: Night boundary hour (for date assignment)
+- **MetricsConfig**: Session gap threshold, valid sleep stages
+
+To customize behavior, edit `config.ts` directly. Values marked with `@env` can be overridden via environment variables.
+
 ## Code Style
 
 ESLint with strict TypeScript checking and multiple plugins (typescript-eslint, unicorn, sonarjs, perfectionist, regexp, promise, node).
@@ -107,8 +125,10 @@ Run `./create-env.sh` to generate a `.env` with a secure token.
 Enable verbose debug logging by setting `DEBUG_LOGGING=true`. This provides detailed output for troubleshooting:
 
 **Debug Categories:**
+- `AUTH` - Authentication attempts and results (masked tokens, success/failure)
 - `REQUEST` - Raw incoming request bodies (truncated for large payloads)
 - `RESPONSE` - Outgoing response bodies
+- `RETRY` - Retry logic execution (attempt counts, delays, final outcomes)
 - `VALIDATION` - Zod schema validation input/output and errors
 - `TRANSFORM` - Data mapping and transformation (metric mapping, sleep aggregation)
 - `DEDUP` - Deduplication operations (what was filtered, counts)

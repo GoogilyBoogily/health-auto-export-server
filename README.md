@@ -119,10 +119,14 @@ Create a `.env` file or run `./create-env.sh` to generate one:
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `API_TOKEN` | Yes | - | API authentication token (must start with `sk-`) |
+| `OBSIDIAN_VAULT_PATH` | Yes | - | Path to Obsidian vault for Markdown output |
 | `NODE_ENV` | No | `development` | Environment mode (`development` or `production`) |
 | `DATA_DIR` | No | `./data` | Directory for storing JSON data files |
 | `PORT` | No | `3001` | Server port |
 | `LOG_LEVEL` | No | `debug` | Log level (debug/info/warn/error) |
+| `DEBUG_LOGGING` | No | `false` | Enable verbose debug logging for troubleshooting |
+| `CACHE_RETENTION_DAYS` | No | `7` | Days to retain cache data (0 to disable cleanup) |
+| `CORS_ORIGINS` | No | `*` | Comma-separated allowed CORS origins |
 
 ### Token Generation
 

@@ -3,7 +3,9 @@
  * Transforms sleep_analysis metrics into Obsidian sleep tracking frontmatter.
  */
 
+import { SleepConfig } from '../../../config';
 import { MetricName } from '../../../types';
+import { logger } from '../../../utils/logger';
 import { getDateKey, roundTo } from '../utils/dateUtilities';
 
 import type {
@@ -23,10 +25,6 @@ export interface SleepDateData {
   sleepMetrics: SleepMetric[];
   wristTemperature?: number;
 }
-
-// Night boundary hour for date assignment
-// Sleep starting before this hour belongs to the previous day's "night"
-const NIGHT_BOUNDARY_HOUR = 6;
 
 type MetricsByType = Record<string, Metric[]>;
 
@@ -99,6 +97,13 @@ export function groupSleepMetricsByDate(metricsByType: MetricsByType): Map<strin
   if (wristTemperatureData) {
     addWristTemperatureToSleepData(byDate, wristTemperatureData);
   }
+
+  logger.debugLog('TRANSFORM', 'Sleep metrics grouped by night date', {
+    dateKeys: [...byDate.keys()],
+    inputMetricCount: sleepData?.length ?? 0,
+    nightsWithData: byDate.size,
+    wristTemperatureCount: wristTemperatureData?.length ?? 0,
+  });
 
   return byDate;
 }
@@ -176,6 +181,21 @@ function collectAndSortSegments(sleepEntries: SleepMetric[]): SleepSegment[] {
     }
   }
   allSegments.sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+
+  logger.debugTransform(
+    'Sleep segment collection',
+    { sleepEntryCount: sleepEntries.length },
+    {
+      firstSegment: allSegments[0]
+        ? {
+            stage: allSegments[0].stage,
+            startTime: allSegments[0].startTime.toISOString(),
+          }
+        : undefined,
+      totalSegments: allSegments.length,
+    },
+  );
+
   return allSegments;
 }
 
@@ -202,19 +222,30 @@ function formatIsoTimestamp(date: Date): string {
 
 /**
  * Get the "night date" for a sleep session.
- * Sleep starting before NIGHT_BOUNDARY_HOUR (6 AM) belongs to the previous day's night.
+ * Sleep starting before the configured night boundary hour belongs to the previous day's night.
  * This ensures sleep sessions spanning midnight are assigned to the evening date.
  */
 function getNightDate(sleepStart: Date): string {
   const date = new Date(sleepStart);
   const hour = date.getHours();
+  const originalDateKey = getDateKey(date);
 
-  // If sleep starts before 6 AM, it belongs to the previous day's "night"
-  if (hour < NIGHT_BOUNDARY_HOUR) {
+  // If sleep starts before the night boundary, it belongs to the previous day's "night"
+  if (hour < SleepConfig.nightBoundaryHour) {
     date.setDate(date.getDate() - 1);
+    const adjustedDateKey = getDateKey(date);
+
+    logger.debugLog('TRANSFORM', 'Night boundary adjustment applied', {
+      adjustedNightDate: adjustedDateKey,
+      originalDate: originalDateKey,
+      sleepStartHour: hour,
+      sleepStartTime: sleepStart.toISOString(),
+    });
+
+    return adjustedDateKey;
   }
 
-  return getDateKey(date);
+  return originalDateKey;
 }
 
 /**
@@ -314,4 +345,17 @@ function populateFromSegments(frontmatter: SleepFrontmatter, segments: SleepSegm
   frontmatter.deepHours = roundTo(totals.deep, 2);
   frontmatter.remHours = roundTo(totals.rem, 2);
   frontmatter.awakeHours = roundTo(totals.awake, 2);
+
+  logger.debugLog('TRANSFORM', 'Sleep segment totals calculated', {
+    asleepDuration: roundTo(asleepDuration, 2),
+    inBedDuration: roundTo(inBedDuration, 2),
+    segmentCount: segments.length,
+    sleepEfficiency: frontmatter.sleepEfficiency,
+    stageTotals: {
+      awake: roundTo(totals.awake, 2),
+      core: roundTo(totals.core, 2),
+      deep: roundTo(totals.deep, 2),
+      rem: roundTo(totals.rem, 2),
+    },
+  });
 }

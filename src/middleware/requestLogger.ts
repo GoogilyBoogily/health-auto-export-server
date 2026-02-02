@@ -1,6 +1,5 @@
 import { NextFunction, Request, Response } from 'express';
 
-import { debugRequest, debugResponse, isDebugEnabled } from '../utils/debugLogger';
 import { LogContext, Logger } from '../utils/logger';
 
 // Extend Express Request interface to include logging properties
@@ -35,8 +34,8 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
   });
 
   // Debug: Log raw request body
-  if (isDebugEnabled() && req.body) {
-    debugRequest(req.log, req.body, {
+  if (req.body) {
+    req.log.debugRequest(req.body, {
       contentLength: req.headers['content-length'],
       contentType: req.headers['content-type'],
     });
@@ -72,7 +71,7 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
     });
 
     // Debug: Log response body
-    if (isDebugEnabled() && chunk) {
+    if (chunk) {
       try {
         let responseBody: unknown;
         if (typeof chunk === 'string') {
@@ -82,11 +81,11 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
         } else {
           responseBody = chunk;
         }
-        debugResponse(req.log, statusCode, responseBody, { durationMs });
+        req.log.debugResponse(statusCode, responseBody, { durationMs });
       } catch {
         // If not JSON, log as string representation
         const chunkString = chunk instanceof Buffer ? chunk.toString() : JSON.stringify(chunk);
-        debugResponse(req.log, statusCode, chunkString, { durationMs });
+        req.log.debugResponse(statusCode, chunkString, { durationMs });
       }
     }
 

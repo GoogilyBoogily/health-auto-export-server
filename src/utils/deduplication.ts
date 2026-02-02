@@ -1,6 +1,5 @@
 import { getDateKey as getUtcDateKey } from '../storage/fileHelpers';
 import { getDateKey as getLocalDateKey } from '../storage/obsidian/utils/dateUtilities';
-import { debugDateBoundary, isDebugEnabled } from './debugLogger';
 import { logger } from './logger';
 
 import type {
@@ -47,6 +46,10 @@ export function buildWorkoutIdSet(cachedData: Map<string, WorkoutDailyFile>): Se
  * Create a deterministic hash string for a metric.
  * Two metrics with identical data will produce the same hash.
  *
+ * Used by both:
+ * - Upstream deduplication (filterDuplicateMetrics) to filter incoming requests
+ * - CacheStorage to detect duplicates when writing to cache files
+ *
  * Uses a fast path for common BaseMetric types (90%+ of traffic)
  * to avoid expensive recursive normalization.
  */
@@ -80,7 +83,6 @@ export function createMetricHash(metric: Metric): string {
  */
 export function extractDatesFromMetrics(metricsByType: Record<string, Metric[]>): string[] {
   const dates = new Set<string>();
-  const debugEnabled = isDebugEnabled(); // Hoist check outside loops for performance
 
   for (const metrics of Object.values(metricsByType)) {
     for (const metric of metrics) {
@@ -89,11 +91,9 @@ export function extractDatesFromMetrics(metricsByType: Record<string, Metric[]>)
       dates.add(utcKey);
 
       // Log info when UTC and local dates differ (near midnight boundary)
-      if (debugEnabled) {
-        const localKey = getLocalDateKey(metricDate);
-        if (utcKey !== localKey) {
-          debugDateBoundary(logger, metricDate, utcKey, localKey, 'extractDatesFromMetrics');
-        }
+      const localKey = getLocalDateKey(metricDate);
+      if (utcKey !== localKey) {
+        logger.debugDateBoundary(metricDate, utcKey, localKey, 'extractDatesFromMetrics');
       }
     }
   }
@@ -108,18 +108,15 @@ export function extractDatesFromMetrics(metricsByType: Record<string, Metric[]>)
  */
 export function extractDatesFromWorkouts(workouts: WorkoutData[]): string[] {
   const dates = new Set<string>();
-  const debugEnabled = isDebugEnabled(); // Hoist check outside loops for performance
 
   for (const workout of workouts) {
     const utcKey = getUtcDateKey(workout.start);
     dates.add(utcKey);
 
     // Log info when UTC and local dates differ (near midnight boundary)
-    if (debugEnabled) {
-      const localKey = getLocalDateKey(workout.start);
-      if (utcKey !== localKey) {
-        debugDateBoundary(logger, workout.start, utcKey, localKey, 'extractDatesFromWorkouts');
-      }
+    const localKey = getLocalDateKey(workout.start);
+    if (utcKey !== localKey) {
+      logger.debugDateBoundary(workout.start, utcKey, localKey, 'extractDatesFromWorkouts');
     }
   }
 

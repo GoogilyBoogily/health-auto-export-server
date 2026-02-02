@@ -8,6 +8,8 @@
 
 import { NextFunction, Request, Response } from 'express';
 
+import { RateLimitConfig } from '../config';
+
 export interface RateLimitOptions {
   /** Maximum number of requests allowed in the time window */
   maxRequests: number;
@@ -23,9 +25,9 @@ interface RequestRecord {
 }
 
 const DEFAULT_OPTIONS: RateLimitOptions = {
-  maxRequests: 100, // 100 requests per minute
-  skipPaths: ['/health'],
-  windowMs: 60_000, // 1 minute
+  maxRequests: RateLimitConfig.maxRequests,
+  skipPaths: RateLimitConfig.skipPaths,
+  windowMs: RateLimitConfig.windowMs,
 };
 
 /**
@@ -136,7 +138,7 @@ function startCleanup(windowMs: number): void {
         requestStore.delete(key);
       }
     }
-  }, windowMs * 2); // Cleanup every 2 windows
+  }, windowMs * RateLimitConfig.cleanupMultiplier);
 
   // Don't block process exit
   cleanupInterval.unref();

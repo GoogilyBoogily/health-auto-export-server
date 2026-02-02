@@ -1,7 +1,9 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
+import { CacheConfig } from '../config';
 import { mapRoute, mapWorkoutData } from '../mappers';
+import { createMetricHash } from '../utils/deduplication';
 import { logger } from '../utils/logger';
 import {
   atomicWrite,
@@ -25,9 +27,6 @@ import type {
   WorkoutData,
 } from '../types';
 
-const DEFAULT_RETENTION_DAYS = 7;
-const MAX_CLEANUP_FAILURES = 5;
-
 /**
  * Rolling cache storage for health data deduplication.
  * Stores data for the last N days (configurable) to enable
@@ -40,7 +39,7 @@ export class CacheStorage {
 
   constructor(dataDirectory?: string, retentionDays?: number) {
     this.dataDirectory = dataDirectory ?? process.env.DATA_DIR ?? './data';
-    this.retentionDays = retentionDays ?? DEFAULT_RETENTION_DAYS;
+    this.retentionDays = retentionDays ?? CacheConfig.retentionDays;
   }
 
   /**
@@ -181,11 +180,11 @@ export class CacheStorage {
     } else {
       this.cleanupConsecutiveFailures++;
 
-      if (this.cleanupConsecutiveFailures >= MAX_CLEANUP_FAILURES) {
+      if (this.cleanupConsecutiveFailures >= CacheConfig.maxCleanupFailures) {
         const errorMessage = `Cache cleanup failed ${String(this.cleanupConsecutiveFailures)} consecutive times - disk may fill up`;
         logger.error(errorMessage, undefined, {
           consecutiveFailures: this.cleanupConsecutiveFailures,
-          maxFailures: MAX_CLEANUP_FAILURES,
+          maxFailures: CacheConfig.maxCleanupFailures,
         });
         throw new Error(errorMessage);
       }
@@ -193,7 +192,7 @@ export class CacheStorage {
       logger.warn('Cache cleanup partially failed', {
         consecutiveFailures: this.cleanupConsecutiveFailures,
         deletedFiles,
-        maxFailures: MAX_CLEANUP_FAILURES,
+        maxFailures: CacheConfig.maxCleanupFailures,
       });
     }
 
@@ -213,7 +212,7 @@ export class CacheStorage {
       const years = await fs.readdir(baseDirectory);
 
       for (const year of years) {
-        if (!/^\d{4}$/.test(year)) continue;
+        if (!CacheConfig.patterns.yearRegex.test(year)) continue;
 
         const yearNumber = Number.parseInt(year, 10);
 
@@ -231,7 +230,7 @@ export class CacheStorage {
         const months = await fs.readdir(yearDirectory);
 
         for (const month of months) {
-          if (!/^\d{2}$/.test(month)) continue;
+          if (!CacheConfig.patterns.monthRegex.test(month)) continue;
 
           const monthNumber = Number.parseInt(month, 10);
 
@@ -249,7 +248,7 @@ export class CacheStorage {
           const files = await fs.readdir(monthDirectory);
 
           for (const file of files) {
-            const match = /^(\d{4}-\d{2}-\d{2})\.json$/.exec(file);
+            const match = CacheConfig.patterns.dateFileRegex.exec(file);
             if (!match) continue;
 
             const fileDate = new Date(match[1] + 'T00:00:00.000Z');
@@ -585,16 +584,6 @@ export class CacheStorage {
     };
   }
 
-  /**
-   * Create a deduplication key for a metric.
-   * Uses date ISO string + source to match MongoDB's unique index.
-   */
-  private getMetricKey(metric: Metric & MetricCommon): string {
-    const date = new Date(metric.date).toISOString();
-    const source = metric.source ?? '';
-    return `${date}|${source}`;
-  }
-
   private getMetricsFilePath(date: Date): string {
     return getFilePath(path.join(this.dataDirectory, 'metrics'), date);
   }
@@ -625,11 +614,11 @@ export class CacheStorage {
         // Build lookup map for O(1) deduplication
         const existingMap = new Map<string, number>();
         for (const [index, m] of content.metrics[metricType].entries()) {
-          existingMap.set(this.getMetricKey(m), index);
+          existingMap.set(createMetricHash(m), index);
         }
 
         for (const metric of metrics) {
-          const key = this.getMetricKey(metric);
+          const key = createMetricHash(metric);
           const existingIndex = existingMap.get(key);
 
           if (existingIndex === undefined) {
@@ -669,14 +658,14 @@ export class CacheStorage {
       // Build lookup map for O(1) deduplication
       const existingMap = new Map<string, number>();
       for (const [index, m] of content.metrics[metricType].entries()) {
-        existingMap.set(this.getMetricKey(m), index);
+        existingMap.set(createMetricHash(m), index);
       }
 
       let saved = 0;
       let updated = 0;
 
       for (const metric of metrics) {
-        const key = this.getMetricKey(metric);
+        const key = createMetricHash(metric);
         const existingIndex = existingMap.get(key);
 
         if (existingIndex === undefined) {
@@ -766,12 +755,12 @@ export class CacheStorage {
         // Build lookup map for O(1) deduplication (re-check inside lock)
         const existingMap = new Map<string, number>();
         for (const [index, m] of content.metrics[metricType].entries()) {
-          existingMap.set(this.getMetricKey(m), index);
+          existingMap.set(createMetricHash(m), index);
         }
 
         // Only append metrics that don't already exist
         for (const metric of metrics) {
-          const key = this.getMetricKey(metric);
+          const key = createMetricHash(metric);
           if (!existingMap.has(key)) {
             content.metrics[metricType].push(metric);
             existingMap.set(key, content.metrics[metricType].length - 1);

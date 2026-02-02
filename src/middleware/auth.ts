@@ -2,12 +2,14 @@ import { timingSafeEqual } from 'node:crypto';
 
 import { NextFunction, Request, Response } from 'express';
 
+import { AuthConfig } from '../config';
+
 /**
  * Determine the reason for auth failure (for logging purposes only).
  */
 function getAuthFailureReason(token: string | undefined): string {
   if (!token) return 'missing_token';
-  if (!token.startsWith('sk-')) return 'invalid_format';
+  if (!token.startsWith(AuthConfig.tokenPrefix)) return 'invalid_format';
   return 'token_mismatch';
 }
 
@@ -30,23 +32,44 @@ function isValidToken(provided: string, expected: string): boolean {
  * is used before environment validation.
  */
 export const requireWriteAuth = (req: Request, res: Response, next: NextFunction) => {
-  const token = req.headers['api-key'] as string;
-  const apiToken = process.env.API_TOKEN;
+  const token = req.headers[AuthConfig.headerName] as string;
+  const apiToken = process.env[AuthConfig.tokenEnvVar];
+
+  // Log auth attempt with masked token (show first 7 chars: "sk-XXX...")
+  const maskedToken = token ? `${token.slice(0, 7)}...` : undefined;
+  req.log.debugAuth('Auth attempt received', {
+    maskedToken,
+    path: req.path,
+  });
 
   // Fail-safe: ensure API_TOKEN is configured (defense-in-depth)
   if (!apiToken || apiToken.length === 0) {
-    req.log.error('API_TOKEN not configured - rejecting request');
+    req.log.debugAuth('Server config error', {
+      reason: `${AuthConfig.tokenEnvVar} not configured`,
+      success: false,
+    });
+    req.log.error(`${AuthConfig.tokenEnvVar} not configured - rejecting request`);
     return res.status(500).json({ error: 'Server configuration error' });
   }
 
-  if (!token || !token.startsWith('sk-') || !isValidToken(token, apiToken)) {
+  if (!token || !token.startsWith(AuthConfig.tokenPrefix) || !isValidToken(token, apiToken)) {
+    const reason = getAuthFailureReason(token);
+    req.log.debugAuth('Validation failure', {
+      path: req.path,
+      reason,
+      success: false,
+    });
     req.log.warn('Write authentication failed', {
       path: req.path,
-      reason: getAuthFailureReason(token),
+      reason,
     });
     return res.status(401).json({ error: 'Unauthorized: Invalid write token' });
   }
 
+  req.log.debugAuth('Authentication successful', {
+    path: req.path,
+    success: true,
+  });
   req.log.debug('Write authentication successful');
   next();
 };

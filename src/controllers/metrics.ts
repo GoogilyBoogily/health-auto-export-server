@@ -1,3 +1,4 @@
+import { RetryConfig } from '../config';
 import {
   createMappingContext,
   flushValidationStats,
@@ -5,21 +6,15 @@ import {
   mapMetric,
 } from '../mappers';
 import { cacheStorage, getObsidianStorage } from '../storage';
-import { debugDedup, debugLog, debugStorage, isDebugEnabled } from '../utils/debugLogger';
 import { extractDatesFromMetrics, filterDuplicateMetrics } from '../utils/deduplication';
 import { Logger } from '../utils/logger';
 import { withRetry } from '../utils/retry';
 
 import type { IngestData, IngestResponse, Metric } from '../types';
 
-// === RETRY CONFIGURATION ===
-const MAX_OBSIDIAN_RETRIES = 3;
-const RETRY_BASE_DELAY_MS = 1000;
-
 // === CLEANUP DEBOUNCING ===
 // Prevents overlapping cleanup runs from concurrent requests
 let cleanupScheduled = false;
-const CLEANUP_DEBOUNCE_MS = 5000;
 
 /**
  * Schedule cache cleanup with debouncing to prevent overlapping runs.
@@ -45,13 +40,12 @@ function scheduleCleanup(log?: Logger): void {
           error: error instanceof Error ? error.message : 'Unknown',
         });
       });
-  }, CLEANUP_DEBOUNCE_MS);
+  }, RetryConfig.cleanupDebounceMs);
 
   // Don't block process exit
   timeout.unref();
 }
 
-/* eslint-disable sonarjs/cognitive-complexity -- Debug logging conditionals add necessary complexity */
 export const saveMetrics = async (
   ingestData: IngestData,
   log?: Logger,
@@ -75,12 +69,10 @@ export const saveMetrics = async (
     log?.debug('Processing metrics', { rawMetricsCount: metricsData.length });
 
     // Debug: Log raw metrics data structure
-    if (log && isDebugEnabled()) {
-      debugLog(log, 'TRANSFORM', 'Raw metrics input', {
-        metricTypes: metricsData.map((m) => ({ dataCount: m.data.length, name: m.name })),
-        totalMetrics: metricsData.length,
-      });
-    }
+    log?.debugLog('TRANSFORM', 'Raw metrics input', {
+      metricTypes: metricsData.map((m) => ({ dataCount: m.data.length, name: m.name })),
+      totalMetrics: metricsData.length,
+    });
 
     // Create request-scoped context for validation tracking
     const mappingContext = createMappingContext(log);
@@ -104,14 +96,12 @@ export const saveMetrics = async (
     });
 
     // Debug: Log transformed metrics structure
-    if (log && isDebugEnabled()) {
-      const transformSummary = Object.entries(metricsByType).map(([name, metrics]) => ({
-        count: metrics.length,
-        name,
-        sampleDate: metrics[0]?.date,
-      }));
-      debugLog(log, 'TRANSFORM', 'Metrics transformed and grouped', { byType: transformSummary });
-    }
+    const transformSummary = Object.entries(metricsByType).map(([name, metrics]) => ({
+      count: metrics.length,
+      name,
+      sampleDate: metrics[0]?.date,
+    }));
+    log?.debugLog('TRANSFORM', 'Metrics transformed and grouped', { byType: transformSummary });
 
     // === DEDUPLICATION FLOW ===
 
@@ -131,18 +121,16 @@ export const saveMetrics = async (
     log?.debug('Deduplication complete', { duplicateCount, newCount });
 
     // Debug: Log detailed deduplication results
-    if (log && isDebugEnabled()) {
-      const newMetricsSummary = Object.entries(newMetrics).map(([name, metrics]) => ({
-        count: metrics.length,
-        name,
-      }));
-      debugDedup(log, 'Metrics deduplication', {
-        duplicateCount,
-        inputCount: Object.values(metricsByType).reduce((sum, m) => sum + m.length, 0),
-        newCount,
-      });
-      debugLog(log, 'DEDUP', 'New metrics after deduplication', { byType: newMetricsSummary });
-    }
+    const newMetricsSummary = Object.entries(newMetrics).map(([name, metrics]) => ({
+      count: metrics.length,
+      name,
+    }));
+    log?.debugDedup('Metrics deduplication', {
+      duplicateCount,
+      inputCount: Object.values(metricsByType).reduce((sum, m) => sum + m.length, 0),
+      newCount,
+    });
+    log?.debugLog('DEDUP', 'New metrics after deduplication', { byType: newMetricsSummary });
 
     // 4. If all data is duplicates, return early
     if (newCount === 0) {
@@ -159,37 +147,33 @@ export const saveMetrics = async (
     let obsidianSaved: number;
 
     // Debug: Log what we're about to write to Obsidian
-    if (log && isDebugEnabled()) {
-      debugStorage(log, 'Preparing Obsidian write', {
-        data: Object.entries(newMetrics).map(([name, metrics]) => ({
-          count: metrics.length,
-          name,
-        })),
-        fileType: 'metrics',
-      });
-    }
+    log?.debugStorage('Preparing Obsidian write', {
+      data: Object.entries(newMetrics).map(([name, metrics]) => ({
+        count: metrics.length,
+        name,
+      })),
+      fileType: 'metrics',
+    });
 
     try {
       const obsidianResult = await withRetry(() => obsidianStorage.saveMetrics(newMetrics), {
-        baseDelayMs: RETRY_BASE_DELAY_MS,
+        baseDelayMs: RetryConfig.baseDelayMs,
         log,
-        maxRetries: MAX_OBSIDIAN_RETRIES,
+        maxRetries: RetryConfig.maxRetries,
         operationName: 'Obsidian write',
       });
       obsidianSaved = obsidianResult.saved;
 
       // Debug: Log Obsidian write result
-      if (log && isDebugEnabled()) {
-        debugStorage(log, 'Obsidian write completed', {
-          metadata: { saved: obsidianSaved, updated: obsidianResult.updated },
-        });
-      }
+      log?.debugStorage('Obsidian write completed', {
+        metadata: { saved: obsidianSaved, updated: obsidianResult.updated },
+      });
     } catch (error) {
       // Obsidian failed after all retries - do NOT update cache, return error
       const obsidianError = error instanceof Error ? error.message : 'Unknown Obsidian error';
       log?.error('Obsidian storage failed after all retries, cache not updated', {
         error: obsidianError,
-        retries: MAX_OBSIDIAN_RETRIES,
+        retries: RetryConfig.maxRetries,
       });
 
       timer?.end('error', 'Failed to save metrics to Obsidian', {
@@ -200,7 +184,7 @@ export const saveMetrics = async (
 
       return {
         metrics: {
-          error: `Obsidian storage failed after ${String(MAX_OBSIDIAN_RETRIES)} attempts: ${obsidianError}`,
+          error: `Obsidian storage failed after ${String(RetryConfig.maxRetries)} attempts: ${obsidianError}`,
           success: false,
         },
       };
@@ -242,4 +226,3 @@ export const saveMetrics = async (
     return errorResponse;
   }
 };
-/* eslint-enable sonarjs/cognitive-complexity */
