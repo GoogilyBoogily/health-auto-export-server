@@ -28,7 +28,17 @@ export interface HealthFrontmatter {
   walkingRunningDistance?: number;
 }
 
-// ===== SLEEP TRACKING =====
+// ===== WORKOUT TRACKING =====
+
+/**
+ * Heart rate reading during a workout (per-minute data).
+ */
+export interface HeartRateReading {
+  avg: number;
+  max: number;
+  min: number;
+  time: string; // ISO timestamp with timezone
+}
 
 export interface MarkdownFile {
   body: string;
@@ -37,7 +47,15 @@ export interface MarkdownFile {
 
 export type ObsidianFrontmatter = HealthFrontmatter | SleepFrontmatter | WorkoutFrontmatter;
 
-// ===== WORKOUT TRACKING =====
+/**
+ * Heart rate recovery reading after workout ends.
+ */
+export interface RecoveryReading {
+  time: string; // ISO timestamp with timezone
+  value: number;
+}
+
+// ===== SLEEP TRACKING =====
 
 export interface SleepFrontmatter {
   date: string; // YYYY-MM-DD
@@ -71,22 +89,29 @@ export interface SleepStageEntry {
 export type TrackingType = 'health' | 'sleep' | 'workout';
 
 export interface WorkoutEntry {
+  appleWorkoutId: string; // Original workout ID from Apple Health
   duration: number; // minutes
-  endTime: string; // HH:MM
-  sourceId: string; // Original workout ID from Health Auto Export
-  startTime: string; // HH:MM
+  endTime: string; // ISO timestamp with timezone
+  startTime: string; // ISO timestamp with timezone
   workoutId: string; // kebab-case derived from name
   workoutType: string; // Display name
   activeEnergy?: number; // kcal
   avgHeartRate?: number;
   distance?: number; // km or mi
+  heartRateReadings?: HeartRateReading[]; // Per-minute HR data during workout
+  heartRateRecovery1Min?: number; // HR drop in 1 minute post-workout
+  heartRateRecovery2Min?: number; // HR drop in 2 minutes post-workout
+  humidity?: number; // percentage
+  intensity?: number; // kcal/hr·kg
   isIndoor?: boolean;
   location?: string; // e.g., "Indoor", "Outdoor"
   maxHeartRate?: number;
   minHeartRate?: number;
+  recoveryReadings?: RecoveryReading[]; // Post-workout HR recovery data
   restingEnergy?: number;
   stepCadence?: number; // steps per minute
   stepCount?: number;
+  temperature?: number; // degrees
 }
 
 export interface WorkoutFrontmatter {

@@ -5,7 +5,7 @@
 
 import { logger } from '../../../utils/logger';
 import {
-  formatTime,
+  formatIsoTimestamp,
   getDateKey,
   getMonthKey,
   getWeekKey,
@@ -13,7 +13,13 @@ import {
   roundTo,
 } from '../utils/dateUtilities';
 
-import type { WorkoutData, WorkoutEntry, WorkoutFrontmatter } from '../../../types';
+import type {
+  HeartRateReading,
+  RecoveryReading,
+  WorkoutData,
+  WorkoutEntry,
+  WorkoutFrontmatter,
+} from '../../../types';
 
 /**
  * Create workout frontmatter from workouts for a specific date.
@@ -28,12 +34,14 @@ export function createWorkoutFrontmatter(
   // Convert workouts to entries
   const newEntries = workouts.map((workout) => workoutToEntry(workout));
 
-  // Merge with existing entries (dedup by sourceId - the unique workout identifier)
+  // Merge with existing entries (dedup by appleWorkoutId - the unique workout identifier)
   let allEntries: WorkoutEntry[];
   if (existing?.workoutEntries) {
-    const existingMap = new Map(existing.workoutEntries.map((entry) => [entry.sourceId, entry]));
+    const existingMap = new Map(
+      existing.workoutEntries.map((entry) => [entry.appleWorkoutId, entry]),
+    );
     for (const entry of newEntries) {
-      existingMap.set(entry.sourceId, entry);
+      existingMap.set(entry.appleWorkoutId, entry);
     }
     allEntries = [...existingMap.values()];
   } else {
@@ -148,6 +156,65 @@ export function mergeWorkoutFrontmatter(
 }
 
 /**
+ * Calculate heart rate recovery drop at specified minutes after workout end.
+ * Returns the drop from maxHeartRate to HR at that time.
+ */
+function calculateRecoveryDrop(
+  workout: WorkoutData,
+  maxHeartRate: number | undefined,
+  targetMinutes: number,
+): number | undefined {
+  if (
+    !workout.heartRateRecovery ||
+    workout.heartRateRecovery.length === 0 ||
+    maxHeartRate === undefined
+  ) {
+    return undefined;
+  }
+
+  const endTime = new Date(workout.end).getTime();
+  const targetTime = endTime + targetMinutes * 60 * 1000;
+
+  // Find the reading closest to the target time
+  let closestReading = workout.heartRateRecovery[0];
+  let closestDiff = Math.abs(new Date(closestReading.date).getTime() - targetTime);
+
+  for (const reading of workout.heartRateRecovery) {
+    const readingTime = new Date(reading.date).getTime();
+    const diff = Math.abs(readingTime - targetTime);
+    if (diff < closestDiff) {
+      closestDiff = diff;
+      closestReading = reading;
+    }
+  }
+
+  // Only use if within 30 seconds of target
+  if (closestDiff > 30_000) {
+    return undefined;
+  }
+
+  const recoveryHr = Math.round(closestReading.Avg);
+  return maxHeartRate - recoveryHr;
+}
+
+/**
+ * Extract heart rate readings array from workout data.
+ * Converts per-minute HR data to HeartRateReading format.
+ */
+function extractHeartRateReadings(workout: WorkoutData): HeartRateReading[] | undefined {
+  if (!workout.heartRateData || workout.heartRateData.length === 0) {
+    return undefined;
+  }
+
+  return workout.heartRateData.map((hr) => ({
+    avg: Math.round(hr.Avg),
+    max: Math.round(hr.Max),
+    min: Math.round(hr.Min),
+    time: formatIsoTimestamp(hr.date) ?? '',
+  }));
+}
+
+/**
  * Extract heart rate values from workout data.
  * Priority: pre-computed fields > nested summary > calculated from array
  */
@@ -211,6 +278,63 @@ function extractHeartRateValues(workout: WorkoutData): {
 }
 
 /**
+ * Extract recovery readings array from workout data.
+ * Converts post-workout HR recovery data to RecoveryReading format.
+ */
+function extractRecoveryReadings(workout: WorkoutData): RecoveryReading[] | undefined {
+  if (!workout.heartRateRecovery || workout.heartRateRecovery.length === 0) {
+    return undefined;
+  }
+
+  return workout.heartRateRecovery.map((hr) => ({
+    time: formatIsoTimestamp(hr.date) ?? '',
+    value: Math.round(hr.Avg),
+  }));
+}
+
+/**
+ * Add optional scalar fields to a workout entry.
+ */
+function populateOptionalFields(entry: WorkoutEntry, workout: WorkoutData): void {
+  // Add energy/distance
+  if (workout.activeEnergyBurned?.qty) {
+    entry.activeEnergy = roundTo(workout.activeEnergyBurned.qty, 2);
+  }
+  if (workout.distance?.qty) {
+    entry.distance = roundTo(workout.distance.qty, 2);
+  }
+
+  // Add step data
+  if (workout.stepCount && workout.stepCount.length > 0) {
+    entry.stepCount = Math.round(workout.stepCount.reduce((sum, s) => sum + s.qty, 0));
+  }
+  if (workout.stepCadence?.qty !== undefined) {
+    entry.stepCadence = roundTo(workout.stepCadence.qty, 1);
+  }
+
+  // Add intensity
+  if (workout.intensity?.qty !== undefined) {
+    entry.intensity = roundTo(workout.intensity.qty, 2);
+  }
+
+  // Add environmental data
+  if (workout.temperature?.qty !== undefined) {
+    entry.temperature = roundTo(workout.temperature.qty, 1);
+  }
+  if (workout.humidity?.qty !== undefined) {
+    entry.humidity = Math.round(workout.humidity.qty);
+  }
+
+  // Add location info
+  if (workout.location !== undefined) {
+    entry.location = workout.location;
+  }
+  if (workout.isIndoor !== undefined) {
+    entry.isIndoor = workout.isIndoor;
+  }
+}
+
+/**
  * Convert workout name to kebab-case ID.
  */
 function toWorkoutId(name: string): string {
@@ -228,47 +352,38 @@ function toWorkoutId(name: string): string {
  */
 function workoutToEntry(workout: WorkoutData): WorkoutEntry {
   const entry: WorkoutEntry = {
+    appleWorkoutId: workout.id,
     duration: Math.round(workout.duration / 60), // seconds to minutes
-    endTime: formatTime(workout.end) ?? '',
-    sourceId: workout.id,
-    startTime: formatTime(workout.start) ?? '',
+    endTime: formatIsoTimestamp(workout.end) ?? '',
+    startTime: formatIsoTimestamp(workout.start) ?? '',
     workoutId: toWorkoutId(workout.name),
     workoutType: workout.name,
   };
 
-  // Add optional fields
-  if (workout.activeEnergyBurned?.qty) {
-    entry.activeEnergy = roundTo(workout.activeEnergyBurned.qty, 2);
-  }
-
-  if (workout.distance?.qty) {
-    entry.distance = roundTo(workout.distance.qty, 2);
-  }
-
-  // Extract heart rate values
+  // Extract heart rate summary values
   const hrValues = extractHeartRateValues(workout);
   if (hrValues.avg !== undefined) entry.avgHeartRate = hrValues.avg;
   if (hrValues.max !== undefined) entry.maxHeartRate = hrValues.max;
   if (hrValues.min !== undefined) entry.minHeartRate = hrValues.min;
 
-  // Process step count
-  if (workout.stepCount && workout.stepCount.length > 0) {
-    entry.stepCount = Math.round(workout.stepCount.reduce((sum, s) => sum + s.qty, 0));
+  // Extract heart rate readings array
+  const heartRateReadings = extractHeartRateReadings(workout);
+  if (heartRateReadings && heartRateReadings.length > 0) {
+    entry.heartRateReadings = heartRateReadings;
   }
 
-  // Add step cadence if available
-  if (workout.stepCadence?.qty !== undefined) {
-    entry.stepCadence = roundTo(workout.stepCadence.qty, 2);
+  // Extract recovery readings and calculate recovery drops
+  const recoveryReadings = extractRecoveryReadings(workout);
+  if (recoveryReadings && recoveryReadings.length > 0) {
+    entry.recoveryReadings = recoveryReadings;
+    const recovery1Min = calculateRecoveryDrop(workout, hrValues.max, 1);
+    const recovery2Min = calculateRecoveryDrop(workout, hrValues.max, 2);
+    if (recovery1Min !== undefined) entry.heartRateRecovery1Min = recovery1Min;
+    if (recovery2Min !== undefined) entry.heartRateRecovery2Min = recovery2Min;
   }
 
-  // Add location info if available
-  if (workout.location !== undefined) {
-    entry.location = workout.location;
-  }
-
-  if (workout.isIndoor !== undefined) {
-    entry.isIndoor = workout.isIndoor;
-  }
+  // Populate other optional fields
+  populateOptionalFields(entry, workout);
 
   logger.debugTransform(
     'Workout transformed to entry',
@@ -282,6 +397,11 @@ function workoutToEntry(workout: WorkoutData): WorkoutEntry {
       distance: entry.distance,
       durationMinutes: entry.duration,
       heartRate: hrValues.avg === undefined ? undefined : hrValues,
+      heartRateReadings: heartRateReadings?.length ?? 0,
+      intensity: entry.intensity,
+      recovery1Min: entry.heartRateRecovery1Min,
+      recovery2Min: entry.heartRateRecovery2Min,
+      recoveryReadings: recoveryReadings?.length ?? 0,
       workoutId: entry.workoutId,
     },
   );

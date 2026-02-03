@@ -65,26 +65,39 @@ export async function ensureDirectory(directoryPath: string): Promise<void> {
 }
 
 /**
- * Format a date as YYYY-MM-DD string (UTC).
- * Uses UTC methods to ensure consistent file naming regardless of server timezone.
+ * Extract the date as YYYY-MM-DD string from a date string or Date object.
+ *
+ * For strings (e.g., "2026-02-02 08:00:00 -0600"), extracts the date portion directly,
+ * preserving the user's intended local date without timezone conversion.
+ *
+ * For Date objects, falls back to server local timezone extraction.
  */
 export function getDateKey(date: Date | string): string {
+  if (typeof date === 'string') {
+    // Extract date portion directly from the string to preserve user's local date
+    // Format: "YYYY-MM-DD HH:MM:SS ±HHMM" or ISO format "YYYY-MM-DDTHH:MM:SS..."
+    const dateMatch = /^(\d{4}-\d{2}-\d{2})/.exec(date);
+    if (dateMatch) {
+      return dateMatch[1];
+    }
+  }
+
+  // Fallback for Date objects or non-standard string formats
   const d = new Date(date);
-  const year = String(d.getUTCFullYear());
-  const month = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
+  const year = String(d.getFullYear());
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
 
 /**
- * Build file path in YYYY/MM/YYYY-MM-DD.json format (UTC).
- * Uses UTC methods to ensure consistent file paths regardless of server timezone.
+ * Build file path in YYYY/MM/YYYY-MM-DD.json format.
+ * Uses getDateKey internally to ensure consistent date handling across all storage backends.
  */
-export function getFilePath(baseDirectory: string, date: Date): string {
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(date.getUTCDate()).padStart(2, '0');
-  return path.join(baseDirectory, String(year), month, `${String(year)}-${month}-${day}.json`);
+export function getFilePath(baseDirectory: string, date: Date | string): string {
+  const dateKey = getDateKey(date);
+  const [year, month] = dateKey.split('-');
+  return path.join(baseDirectory, year, month, `${dateKey}.json`);
 }
 
 /**

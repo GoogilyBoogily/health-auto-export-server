@@ -432,7 +432,25 @@ export class Logger {
   }
 
   private formatTimestamp(): string {
-    return new Date().toISOString();
+    const d = new Date();
+
+    // Get timezone offset and format as ±HH:MM
+    const offsetMinutes = d.getTimezoneOffset();
+    const offsetSign = offsetMinutes <= 0 ? '+' : '-';
+    const offsetHours = String(Math.floor(Math.abs(offsetMinutes) / 60)).padStart(2, '0');
+    const offsetMins = String(Math.abs(offsetMinutes) % 60).padStart(2, '0');
+    const tzOffset = `${offsetSign}${offsetHours}:${offsetMins}`;
+
+    // Format local date/time components with milliseconds
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    const seconds = String(d.getSeconds()).padStart(2, '0');
+    const ms = String(d.getMilliseconds()).padStart(3, '0');
+
+    return `${String(year)}-${month}-${day}T${hours}:${minutes}:${seconds}.${ms}${tzOffset}`;
   }
 
   private log(

@@ -13,7 +13,6 @@
  * - Cache: Cache storage and cleanup
  * - Retry: Retry logic for storage operations
  * - Obsidian: Obsidian vault integration paths and templates
- * - Sleep: Sleep data processing
  * - Metrics: Metric processing settings
  */
 
@@ -277,9 +276,9 @@ export const ObsidianConfig = {
    * - Workout: 70-79 Journals & Self-Tracking/76 Workout Tracking
    */
   trackingPaths: {
-    health: '70-79 Journals & Self-Tracking/78 Health Tracking',
-    sleep: '70-79 Journals & Self-Tracking/77 Sleep Tracking',
-    workout: '70-79 Journals & Self-Tracking/76 Workout Tracking',
+    health: '70-79 Journals & Self-Tracking/79 Health Tracking',
+    sleep: '70-79 Journals & Self-Tracking/78 Sleep Tracking',
+    workout: '70-79 Journals & Self-Tracking/77 Workout Tracking',
   } satisfies Record<TrackingType, string>,
 
   /**
@@ -308,23 +307,6 @@ export const ObsidianConfig = {
     /** ISO 8601 timestamp with timezone validation */
     isoTimestampRegex: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/,
   },
-} as const;
-
-// =============================================================================
-// SLEEP CONFIGURATION
-// =============================================================================
-
-export const SleepConfig = {
-  /**
-   * Hour boundary for assigning sleep to a "night date".
-   * Sleep starting before this hour belongs to the previous day's night.
-   *
-   * Example: Sleep starting at 2 AM Jan 15 → assigned to Jan 14's file.
-   * Sleep starting at 10 PM Jan 14 → assigned to Jan 14's file.
-   *
-   * @default 6 (6 AM)
-   */
-  nightBoundaryHour: 6,
 } as const;
 
 // =============================================================================
@@ -379,7 +361,6 @@ export const config = {
   request: RequestConfig,
   retry: RetryConfig,
   server: ServerConfig,
-  sleep: SleepConfig,
 } as const;
 
 export default config;

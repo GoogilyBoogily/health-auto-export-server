@@ -3,7 +3,6 @@
  * Transforms sleep_analysis metrics into Obsidian sleep tracking frontmatter.
  */
 
-import { SleepConfig } from '../../../config';
 import { MetricName } from '../../../types';
 import { logger } from '../../../utils/logger';
 import { getDateKey, roundTo } from '../utils/dateUtilities';
@@ -66,11 +65,10 @@ export function createSleepFrontmatter(
 }
 
 /**
- * Group sleep metrics by evening date (night date).
- * Sleep is attributed to the evening/night it started, not the wake-up date.
- * This matches the CSV import script's behavior for consistency.
+ * Group sleep metrics by wake-up date.
+ * Sleep is attributed to the date it ends (when you wake up).
  *
- * Example: Sleep starting 11:30 PM Dec 14, ending 7 AM Dec 15 → assigned to 2024-12-14.md
+ * Example: Sleep starting 11:30 PM Dec 14, ending 7 AM Dec 15 → assigned to 2024-12-15.md
  */
 export function groupSleepMetricsByDate(metricsByType: MetricsByType): Map<string, SleepDateData> {
   const byDate = new Map<string, SleepDateData>();
@@ -79,8 +77,8 @@ export function groupSleepMetricsByDate(metricsByType: MetricsByType): Map<strin
   const sleepData = metricsByType[MetricName.SLEEP_ANALYSIS] as SleepMetric[] | undefined;
   if (sleepData) {
     for (const sleep of sleepData) {
-      // Use evening/night date for attribution (matches CSV import script)
-      const dateKey = getNightDate(sleep.sleepStart);
+      // Use wake-up date (end date) for attribution
+      const dateKey = getDateKey(sleep.sleepEnd);
       let dateData = byDate.get(dateKey);
       if (!dateData) {
         dateData = { sleepMetrics: [] };
@@ -98,10 +96,10 @@ export function groupSleepMetricsByDate(metricsByType: MetricsByType): Map<strin
     addWristTemperatureToSleepData(byDate, wristTemperatureData);
   }
 
-  logger.debugLog('TRANSFORM', 'Sleep metrics grouped by night date', {
+  logger.debugLog('TRANSFORM', 'Sleep metrics grouped by wake-up date', {
     dateKeys: [...byDate.keys()],
+    datesWithData: byDate.size,
     inputMetricCount: sleepData?.length ?? 0,
-    nightsWithData: byDate.size,
     wristTemperatureCount: wristTemperatureData?.length ?? 0,
   });
 
@@ -135,20 +133,19 @@ export function mergeSleepFrontmatter(
 }
 
 /**
- * Add wrist temperature readings to sleep data, grouped by night date.
- * Uses the end date (morning after sleep) minus one day to determine the night.
- * Multiple readings for the same night are averaged.
+ * Add wrist temperature readings to sleep data, grouped by wake-up date.
+ * Uses the end date (morning after sleep) to determine the date.
+ * Multiple readings for the same date are averaged.
  */
 function addWristTemperatureToSleepData(
   byDate: Map<string, SleepDateData>,
   wristTemperatureMetrics: WristTemperatureMetric[],
 ): void {
-  // Group wrist temperature readings by night date
+  // Group wrist temperature readings by wake-up date (end date)
   const temperaturesByDate = new Map<string, number[]>();
   for (const metric of wristTemperatureMetrics) {
-    // Use end date minus one day to get the night date
-    // (end date is the morning after sleep, so subtract a day)
-    const dateKey = getNightDateFromEndDate(metric.endDate);
+    // Use end date (morning after sleep) as the date
+    const dateKey = getDateKey(metric.endDate);
     let temperatures = temperaturesByDate.get(dateKey);
     if (!temperatures) {
       temperatures = [];
@@ -218,44 +215,6 @@ function formatIsoTimestamp(date: Date): string {
   const tzMinutes = String(Math.abs(tzOffset) % 60).padStart(2, '0');
 
   return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}${tzSign}${tzHours}:${tzMinutes}`;
-}
-
-/**
- * Get the "night date" for a sleep session.
- * Sleep starting before the configured night boundary hour belongs to the previous day's night.
- * This ensures sleep sessions spanning midnight are assigned to the evening date.
- */
-function getNightDate(sleepStart: Date): string {
-  const date = new Date(sleepStart);
-  const hour = date.getHours();
-  const originalDateKey = getDateKey(date);
-
-  // If sleep starts before the night boundary, it belongs to the previous day's "night"
-  if (hour < SleepConfig.nightBoundaryHour) {
-    date.setDate(date.getDate() - 1);
-    const adjustedDateKey = getDateKey(date);
-
-    logger.debugLog('TRANSFORM', 'Night boundary adjustment applied', {
-      adjustedNightDate: adjustedDateKey,
-      originalDate: originalDateKey,
-      sleepStartHour: hour,
-      sleepStartTime: sleepStart.toISOString(),
-    });
-
-    return adjustedDateKey;
-  }
-
-  return originalDateKey;
-}
-
-/**
- * Get the night date from the end date of a sleep measurement.
- * The end date is the morning after sleep, so subtract one day to get the night.
- */
-function getNightDateFromEndDate(endDate: Date): string {
-  const date = new Date(endDate);
-  date.setDate(date.getDate() - 1);
-  return getDateKey(date);
 }
 
 /**

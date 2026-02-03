@@ -43,7 +43,7 @@ POST /api/data
 - `src/controllers/` - Request handlers (`ingester.ts` orchestrates, `metrics.ts` and `workouts.ts` process)
 - `src/storage/` - Dual storage system with file locking and atomic writes
 - `src/storage/obsidian/` - Obsidian vault integration with Markdown/YAML frontmatter
-- `src/models/` - TypeScript types (`MetricName.ts` has 100+ health metric enums)
+- `src/types/` - Centralized TypeScript types with barrel export (`index.ts`)
 - `src/validation/` - Zod schemas for request validation
 - `src/middleware/` - Auth (`auth.ts`) and logging (`requestLogger.ts`)
 
@@ -58,9 +58,12 @@ data/workouts/YYYY/MM/YYYY-MM-DD.json
 ```
 
 **2. ObsidianStorage (Markdown)** - Human-readable tracking files in Obsidian vault
-- Health metrics → `tracking/health/YYYY-MM-DD.md`
-- Sleep data → `tracking/sleep/YYYY-MM-DD.md`
-- Workouts → `tracking/workout/YYYY-MM-DD.md`
+
+Default paths use Johnny Decimal numbering (configurable in `config.ts`):
+
+- Health metrics → `70-79 Journals & Self-Tracking/79 Health Tracking/YYYY-MM-DD.md`
+- Sleep data → `70-79 Journals & Self-Tracking/78 Sleep Tracking/YYYY-MM-DD.md`
+- Workouts → `70-79 Journals & Self-Tracking/77 Workout Tracking/YYYY-MM-DD.md`
 
 Each Markdown file has YAML frontmatter for Obsidian Dataview queries.
 
@@ -74,6 +77,7 @@ Each Markdown file has YAML frontmatter for Obsidian Dataview queries.
 ### Logger
 
 `src/utils/logger.ts` - Dual-mode logging:
+
 - Development: Pretty colored output
 - Production: JSON structured logs
 
@@ -90,7 +94,6 @@ All configurable values are centralized in `src/config.ts`. This includes:
 - **CacheConfig**: Retention days, max cleanup failures, file patterns
 - **RetryConfig**: Max retries, base delay, cleanup debounce
 - **ObsidianConfig**: Tracking paths, body templates, frontmatter patterns
-- **SleepConfig**: Night boundary hour (for date assignment)
 - **MetricsConfig**: Session gap threshold, valid sleep stages
 
 To customize behavior, edit `config.ts` directly. Values marked with `@env` can be overridden via environment variables.
@@ -100,6 +103,7 @@ To customize behavior, edit `config.ts` directly. Values marked with `@env` can 
 ESLint with strict TypeScript checking and multiple plugins (typescript-eslint, unicorn, sonarjs, perfectionist, regexp, promise, node).
 
 Key rules:
+
 - No `any` types allowed
 - Underscore-prefixed unused parameters allowed (`argsIgnorePattern: '^_'`)
 - Perfectionist handles import/object/type sorting (natural order)
@@ -125,6 +129,7 @@ Run `./create-env.sh` to generate a `.env` with a secure token.
 Enable verbose debug logging by setting `DEBUG_LOGGING=true`. This provides detailed output for troubleshooting:
 
 **Debug Categories:**
+
 - `AUTH` - Authentication attempts and results (masked tokens, success/failure)
 - `REQUEST` - Raw incoming request bodies (truncated for large payloads)
 - `RESPONSE` - Outgoing response bodies
@@ -140,6 +145,7 @@ Enable verbose debug logging by setting `DEBUG_LOGGING=true`. This provides deta
   - Date boundary cases (UTC vs local date differences near midnight)
 
 **Example usage:**
+
 ```bash
 DEBUG_LOGGING=true bun dev
 ```

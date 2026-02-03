@@ -28,8 +28,10 @@ export { MetricName } from './metricName';
 // Obsidian types
 export type {
   HealthFrontmatter,
+  HeartRateReading,
   MarkdownFile,
   ObsidianFrontmatter,
+  RecoveryReading,
   SleepFrontmatter,
   SleepStageEntry,
   TrackingType,
