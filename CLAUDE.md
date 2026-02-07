@@ -21,6 +21,8 @@ docker compose logs -f hae-server # View logs
 docker compose down               # Stop
 ```
 
+No test suite exists. There is no `bun test` or equivalent.
+
 ## Architecture
 
 **Health Auto Export Server** - A write-only, file-based health data ingestion server for Apple Health data exported via the Health Auto Export iOS app.
@@ -31,27 +33,43 @@ docker compose down               # Stop
 
 ```
 POST /api/data
-  → cors → json parser (50mb) → requestLogger → requireWriteAuth (timing-safe)
+  → cors → json parser (50mb) → rateLimit → requestTimeout → requestLogger
+  → requireWriteAuth (timing-safe token comparison)
   → ingestData controller
     → Zod validation (IngestDataSchema)
     → Promise.allSettled(saveMetrics, saveWorkouts)  # Fault-tolerant
     → Response: 200 (success), 207 (partial), 500 (failure)
 ```
 
+### Data Processing Pipeline
+
+Each controller (`metrics.ts`, `workouts.ts`) follows the same pattern:
+
+```
+Raw API data
+  → Mappers (transform + validation tracking)
+  → Deduplication (read cache → hash compare → filter)
+  → Write Obsidian FIRST (authoritative store, with retry)
+  → On Obsidian success: update cache
+  → Schedule debounced cache cleanup
+```
+
+**Critical invariant:** Obsidian is the authoritative store. Cache only updates after Obsidian succeeds. If Obsidian fails after all retries, the cache is NOT updated and the request returns an error. This prevents cache/Obsidian drift.
+
 ### Key Directories
 
-- `src/controllers/` - Request handlers (`ingester.ts` orchestrates, `metrics.ts` and `workouts.ts` process)
-- `src/storage/` - Dual storage system with file locking and atomic writes
-- `src/storage/obsidian/` - Obsidian vault integration with Markdown/YAML frontmatter
+- `src/controllers/` - `ingester.ts` orchestrates; `metrics.ts` and `workouts.ts` run the pipeline above
+- `src/mappers/` - Transform raw API data into typed objects; `metricMapper.ts` tracks validation stats per-request via `MappingContext`
+- `src/storage/` - Dual storage with file locking and atomic writes
+- `src/storage/obsidian/` - Obsidian vault integration (Markdown with YAML frontmatter)
+- `src/storage/obsidian/formatters/` - Separate formatters for health, sleep, and workout frontmatter
 - `src/types/` - Centralized TypeScript types with barrel export (`index.ts`)
 - `src/validation/` - Zod schemas for request validation
-- `src/middleware/` - Auth (`auth.ts`) and logging (`requestLogger.ts`)
+- `src/middleware/` - Auth, rate limiting, request timeout, request logging
 
 ### Dual Storage System
 
-Data is written to two storage backends simultaneously:
-
-**1. FileStorage (JSON)** - Raw data archive
+**1. CacheStorage (JSON)** - Deduplication cache with automatic expiry
 ```
 data/metrics/YYYY/MM/YYYY-MM-DD.json
 data/workouts/YYYY/MM/YYYY-MM-DD.json
@@ -61,53 +79,37 @@ data/workouts/YYYY/MM/YYYY-MM-DD.json
 
 Default paths use Johnny Decimal numbering (configurable in `config.ts`):
 
-- Health metrics → `70-79 Journals & Self-Tracking/79 Health Tracking/YYYY-MM-DD.md`
-- Sleep data → `70-79 Journals & Self-Tracking/78 Sleep Tracking/YYYY-MM-DD.md`
-- Workouts → `70-79 Journals & Self-Tracking/77 Workout Tracking/YYYY-MM-DD.md`
+- Health metrics → `79 Health Tracking/YYYY-MM-DD.md`
+- Sleep data → `78 Sleep Tracking/YYYY-MM-DD.md`
+- Workouts → `77 Workout Tracking/YYYY-MM-DD.md`
 
 Each Markdown file has YAML frontmatter for Obsidian Dataview queries.
 
 ### Storage Internals
 
 - **Atomic writes:** Temp file + rename prevents corruption
-- **File locking:** `filePath.lock` with 30s stale detection (see `fileHelpers.ts:withLock`)
-- **Deduplication:** Metrics by `date|source`, workouts by `workoutId`
-- **Lazy initialization:** ObsidianStorage initialized after env validation
+- **File locking:** `filePath.lock` with 30s stale detection (`fileHelpers.ts:withLock`)
+- **Deduplication:** Metrics by `date|source` hash, workouts by `workoutId`
+- **Lazy initialization:** ObsidianStorage initialized after env validation in `app.ts`
+- **Cleanup:** Cache files older than `CACHE_RETENTION_DAYS` are deleted, debounced per request
 
 ### Logger
 
-`src/utils/logger.ts` - Dual-mode logging:
-
-- Development: Pretty colored output
-- Production: JSON structured logs
+`src/utils/logger.ts` - Dual-mode logging (pretty in dev, JSON in prod). Request-scoped logger with `startTimer()` for operation timing.
 
 ## Configuration
 
-All configurable values are centralized in `src/config.ts`. This includes:
-
-- **ServerConfig**: Port, host, body size limit, shutdown timeout
-- **RequestConfig**: Request processing timeout
-- **AuthConfig**: Token prefix, header name, env var name
-- **RateLimitConfig**: Max requests, window duration, skip paths, computed cleanup interval
-- **CorsConfig**: Allowed headers, methods, origins env var
-- **FileLockConfig**: Retry delays, max retries, stale timeout, computed total wait time
-- **CacheConfig**: Retention days, max cleanup failures, file patterns
-- **RetryConfig**: Max retries, base delay, cleanup debounce
-- **ObsidianConfig**: Tracking paths (env-configurable), body templates (env-configurable), frontmatter patterns
-- **MetricsConfig**: Session gap threshold (env-configurable), valid sleep stages
-- **StorageConfig**: Data directory, metrics/workouts subdirectory names
-
-To customize behavior, edit `config.ts` directly. Values marked with `@env` can be overridden via environment variables.
+All configurable values are centralized in `src/config.ts` with JSDoc annotations. Values marked `@env` can be overridden via environment variables. Edit `config.ts` directly for non-env-configurable values.
 
 ## Code Style
 
-ESLint with strict TypeScript checking and multiple plugins (typescript-eslint, unicorn, sonarjs, perfectionist, regexp, promise, node).
+ESLint flat config (`eslint.config.mjs`) with strict TypeScript checking and plugins: typescript-eslint, unicorn, sonarjs, perfectionist, regexp, promise, node.
 
 Key rules:
 
 - No `any` types allowed
 - Underscore-prefixed unused parameters allowed (`argsIgnorePattern: '^_'`)
-- Perfectionist handles import/object/type sorting (natural order)
+- Perfectionist handles import/object/type sorting (natural order, partitioned by comment/newline)
 - Express abbreviations allowed: `req`, `res`, `err`, `env`, `acc`
 - Filenames: camelCase or PascalCase
 
@@ -117,6 +119,10 @@ Key rules:
 # Required
 API_TOKEN            # API auth token (must start with "sk-")
 OBSIDIAN_VAULT_PATH  # Path to Obsidian vault for Markdown output
+
+# Optional - Docker
+PUID                 # Host user ID for volume permissions (default: 1000)
+PGID                 # Host group ID for volume permissions (default: 1000)
 
 # Optional - Server
 NODE_ENV             # development|production (default: development)
@@ -146,26 +152,4 @@ Run `./create-env.sh` to generate a `.env` with a secure token.
 
 ### Debug Logging
 
-Enable verbose debug logging by setting `DEBUG_LOGGING=true`. This provides detailed output for troubleshooting:
-
-**Debug Categories:**
-
-- `AUTH` - Authentication attempts and results (masked tokens, success/failure)
-- `REQUEST` - Raw incoming request bodies (truncated for large payloads)
-- `RESPONSE` - Outgoing response bodies
-- `RETRY` - Retry logic execution (attempt counts, delays, final outcomes)
-- `VALIDATION` - Zod schema validation input/output and errors
-- `TRANSFORM` - Data mapping and transformation (metric mapping, sleep aggregation)
-- `DEDUP` - Deduplication operations (what was filtered, counts)
-- `STORAGE` - File operations (paths, frontmatter being written)
-- `DATA_VALIDATION` - Runtime data quality issues:
-  - Invalid dates (NaN after parsing)
-  - Unknown sleep stage values
-  - Missing required fields on metrics (type mismatches)
-  - Date boundary cases (UTC vs local date differences near midnight)
-
-**Example usage:**
-
-```bash
-DEBUG_LOGGING=true bun dev
-```
+Enable with `DEBUG_LOGGING=true bun dev`. Categories: `AUTH`, `REQUEST`, `RESPONSE`, `RETRY`, `VALIDATION`, `TRANSFORM`, `DEDUP`, `STORAGE`, `DATA_VALIDATION`.
