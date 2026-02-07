@@ -218,7 +218,6 @@ export class ObsidianStorage {
     logger.debugStorage('Writing sleep file', {
       data: {
         entriesCount: sleepData.sleepMetrics.length,
-        wristTemperature: sleepData.wristTemperature,
       },
       filePath,
       fileType: 'sleep',

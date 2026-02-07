@@ -10,4 +10,4 @@ export {
   mapMetric,
 } from './metricMapper';
 export type { MappingContext } from './metricMapper';
-export { mapRoute, mapWorkoutData } from './workoutMapper';
+export { mapRoute, mapWorkoutData, prepareWorkouts } from './workoutMapper';

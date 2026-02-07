@@ -1,4 +1,5 @@
 import { RetryConfig } from '../config';
+import { prepareWorkouts } from '../mappers';
 import { cacheStorage, getObsidianStorage } from '../storage';
 import { extractDatesFromWorkouts, filterDuplicateWorkouts } from '../utils/deduplication';
 import { Logger } from '../utils/logger';
@@ -48,9 +49,9 @@ export const saveWorkouts = async (
 
   try {
     const response: IngestResponse = {};
-    const workouts = ingestData.data.workouts;
+    const rawWorkouts = ingestData.data.workouts;
 
-    if (!workouts || workouts.length === 0) {
+    if (!rawWorkouts || rawWorkouts.length === 0) {
       log?.debug('No workout data provided');
       response.workouts = {
         message: 'No workout data provided',
@@ -59,6 +60,9 @@ export const saveWorkouts = async (
       timer?.end('info', 'No workouts to save');
       return response;
     }
+
+    // Extract sourceDate from raw date strings before any Date conversion
+    const workouts = prepareWorkouts(rawWorkouts);
 
     log?.debug('Processing workouts', { count: workouts.length });
 
@@ -162,7 +166,7 @@ export const saveWorkouts = async (
     }
 
     // 6. Only on Obsidian success: Save NEW workouts to cache (pre-deduplicated)
-    const cacheResult = await cacheStorage.saveWorkoutsDirectly(newWorkouts);
+    const cacheResult = await cacheStorage.saveWorkouts(newWorkouts);
 
     // 7. Trigger cache cleanup (debounced)
     scheduleCleanup(log);

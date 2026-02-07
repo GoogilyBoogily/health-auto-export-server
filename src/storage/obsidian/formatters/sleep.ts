@@ -5,7 +5,7 @@
 
 import { MetricName } from '../../../types';
 import { logger } from '../../../utils/logger';
-import { getDateKey, roundTo } from '../utils/dateUtilities';
+import { roundTo } from '../utils/dateUtilities';
 
 import type {
   Metric,
@@ -13,16 +13,13 @@ import type {
   SleepMetric,
   SleepSegment,
   SleepStageEntry,
-  WristTemperatureMetric,
 } from '../../../types';
 
 /**
  * Grouped sleep data for a single night.
- * Combines sleep analysis metrics with wrist temperature.
  */
 export interface SleepDateData {
   sleepMetrics: SleepMetric[];
-  wristTemperature?: number;
 }
 
 type MetricsByType = Record<string, Metric[]>;
@@ -40,12 +37,7 @@ export function createSleepFrontmatter(
     date: dateKey,
   };
 
-  const { sleepMetrics, wristTemperature } = sleepData;
-
-  // Add wrist temperature if present
-  if (wristTemperature !== undefined) {
-    frontmatter.wristTemperature = wristTemperature;
-  }
+  const { sleepMetrics } = sleepData;
 
   if (sleepMetrics.length === 0) {
     return frontmatter;
@@ -54,12 +46,12 @@ export function createSleepFrontmatter(
   // Collect all segments from all entries
   const allSegments = collectAndSortSegments(sleepMetrics);
 
-  // Build frontmatter from segments or fall back to aggregate values
-  if (allSegments.length > 0) {
-    populateFromSegments(frontmatter, allSegments);
-  } else {
-    populateFromAggregates(frontmatter, sleepMetrics);
+  if (allSegments.length === 0) {
+    logger.warn('Sleep data without segments — nothing to store', { dateKey });
+    return frontmatter;
   }
+
+  populateFromSegments(frontmatter, allSegments);
 
   return frontmatter;
 }
@@ -77,8 +69,8 @@ export function groupSleepMetricsByDate(metricsByType: MetricsByType): Map<strin
   const sleepData = metricsByType[MetricName.SLEEP_ANALYSIS] as SleepMetric[] | undefined;
   if (sleepData) {
     for (const sleep of sleepData) {
-      // Use wake-up date (end date) for attribution
-      const dateKey = getDateKey(sleep.sleepEnd);
+      // Use sourceDate (wake-up date extracted before timezone conversion)
+      const dateKey = sleep.sourceDate;
       let dateData = byDate.get(dateKey);
       if (!dateData) {
         dateData = { sleepMetrics: [] };
@@ -88,19 +80,10 @@ export function groupSleepMetricsByDate(metricsByType: MetricsByType): Map<strin
     }
   }
 
-  // Process wrist temperature metrics
-  const wristTemperatureData = metricsByType[MetricName.APPLE_SLEEPING_WRIST_TEMPERATURE] as
-    | WristTemperatureMetric[]
-    | undefined;
-  if (wristTemperatureData) {
-    addWristTemperatureToSleepData(byDate, wristTemperatureData);
-  }
-
   logger.debugLog('TRANSFORM', 'Sleep metrics grouped by wake-up date', {
     dateKeys: [...byDate.keys()],
     datesWithData: byDate.size,
     inputMetricCount: sleepData?.length ?? 0,
-    wristTemperatureCount: wristTemperatureData?.length ?? 0,
   });
 
   return byDate;
@@ -110,10 +93,7 @@ export function groupSleepMetricsByDate(metricsByType: MetricsByType): Map<strin
  * Check if a metric type is sleep-related.
  */
 export function isSleepMetric(metricType: string): boolean {
-  return (
-    metricType === (MetricName.SLEEP_ANALYSIS as string) ||
-    metricType === (MetricName.APPLE_SLEEPING_WRIST_TEMPERATURE as string)
-  );
+  return metricType === (MetricName.SLEEP_ANALYSIS as string);
 }
 
 /**
@@ -130,41 +110,6 @@ export function mergeSleepFrontmatter(
     ...existing,
     ...newData,
   };
-}
-
-/**
- * Add wrist temperature readings to sleep data, grouped by wake-up date.
- * Uses the end date (morning after sleep) to determine the date.
- * Multiple readings for the same date are averaged.
- */
-function addWristTemperatureToSleepData(
-  byDate: Map<string, SleepDateData>,
-  wristTemperatureMetrics: WristTemperatureMetric[],
-): void {
-  // Group wrist temperature readings by wake-up date (end date)
-  const temperaturesByDate = new Map<string, number[]>();
-  for (const metric of wristTemperatureMetrics) {
-    // Use end date (morning after sleep) as the date
-    const dateKey = getDateKey(metric.endDate);
-    let temperatures = temperaturesByDate.get(dateKey);
-    if (!temperatures) {
-      temperatures = [];
-      temperaturesByDate.set(dateKey, temperatures);
-    }
-    temperatures.push(metric.qty);
-  }
-
-  // Add averaged wrist temperatures to sleep data
-  for (const [dateKey, temperatures] of temperaturesByDate) {
-    let dateData = byDate.get(dateKey);
-    if (!dateData) {
-      dateData = { sleepMetrics: [] };
-      byDate.set(dateKey, dateData);
-    }
-    // Average multiple readings and round to 2 decimal places
-    const average = temperatures.reduce((a, b) => a + b, 0) / temperatures.length;
-    dateData.wristTemperature = roundTo(average, 2);
-  }
 }
 
 /**
@@ -218,103 +163,17 @@ function formatIsoTimestamp(date: Date): string {
 }
 
 /**
- * Populate frontmatter from aggregated sleep metrics (legacy fallback).
- */
-function populateFromAggregates(frontmatter: SleepFrontmatter, entries: SleepMetric[]): void {
-  let totalCore = 0;
-  let totalDeep = 0;
-  let totalRem = 0;
-  let totalAwake = 0;
-  let totalInBed = 0;
-  let totalSegmentCount = 0;
-  let earliestStart: Date | undefined;
-  let latestEnd: Date | undefined;
-
-  for (const entry of entries) {
-    totalCore += entry.core;
-    totalDeep += entry.deep;
-    totalRem += entry.rem;
-    totalAwake += entry.awake;
-    totalInBed += entry.inBed;
-    totalSegmentCount += entry.segmentCount ?? 0;
-
-    if (!earliestStart || entry.sleepStart < earliestStart) {
-      earliestStart = entry.sleepStart;
-    }
-    if (!latestEnd || entry.sleepEnd > latestEnd) {
-      latestEnd = entry.sleepEnd;
-    }
-  }
-
-  if (earliestStart) {
-    frontmatter.sleepStart = formatIsoTimestamp(earliestStart);
-  }
-  if (latestEnd) {
-    frontmatter.sleepEnd = formatIsoTimestamp(latestEnd);
-  }
-
-  const asleepDuration = totalCore + totalDeep + totalRem;
-  frontmatter.inBedDuration = roundTo(totalInBed, 2);
-  frontmatter.asleepDuration = roundTo(asleepDuration, 2);
-  frontmatter.sleepEfficiency =
-    totalInBed > 0 ? Math.round((asleepDuration / totalInBed) * 100) : undefined;
-  if (totalSegmentCount > 0) {
-    frontmatter.sleepSegments = totalSegmentCount;
-  }
-  frontmatter.coreHours = roundTo(totalCore, 2);
-  frontmatter.deepHours = roundTo(totalDeep, 2);
-  frontmatter.remHours = roundTo(totalRem, 2);
-  frontmatter.awakeHours = roundTo(totalAwake, 2);
-}
-
-/**
  * Populate frontmatter from individual sleep segments.
  */
 function populateFromSegments(frontmatter: SleepFrontmatter, segments: SleepSegment[]): void {
-  frontmatter.sleepStages = segments.map(
-    (seg): SleepStageEntry => ({
+  frontmatter.sleepStages = segments.map((seg): SleepStageEntry => {
+    const entry: SleepStageEntry = {
       duration: roundTo(seg.duration, 2),
       endTime: formatIsoTimestamp(seg.endTime),
       stage: seg.stage,
       startTime: formatIsoTimestamp(seg.startTime),
-    }),
-  );
-
-  const firstSegment = segments[0];
-  const lastSegment = segments.at(-1) ?? firstSegment;
-
-  frontmatter.sleepStart = formatIsoTimestamp(firstSegment.startTime);
-  frontmatter.sleepEnd = formatIsoTimestamp(lastSegment.endTime);
-
-  const totals = { awake: 0, core: 0, deep: 0, rem: 0 };
-  for (const seg of segments) {
-    totals[seg.stage] += seg.duration;
-  }
-
-  const inBedDuration =
-    (lastSegment.endTime.getTime() - firstSegment.startTime.getTime()) / (1000 * 60 * 60);
-  const asleepDuration = totals.core + totals.deep + totals.rem;
-
-  frontmatter.inBedDuration = roundTo(inBedDuration, 2);
-  frontmatter.asleepDuration = roundTo(asleepDuration, 2);
-  frontmatter.sleepEfficiency =
-    inBedDuration > 0 ? Math.round((asleepDuration / inBedDuration) * 100) : undefined;
-  frontmatter.sleepSegments = segments.length;
-  frontmatter.coreHours = roundTo(totals.core, 2);
-  frontmatter.deepHours = roundTo(totals.deep, 2);
-  frontmatter.remHours = roundTo(totals.rem, 2);
-  frontmatter.awakeHours = roundTo(totals.awake, 2);
-
-  logger.debugLog('TRANSFORM', 'Sleep segment totals calculated', {
-    asleepDuration: roundTo(asleepDuration, 2),
-    inBedDuration: roundTo(inBedDuration, 2),
-    segmentCount: segments.length,
-    sleepEfficiency: frontmatter.sleepEfficiency,
-    stageTotals: {
-      awake: roundTo(totals.awake, 2),
-      core: roundTo(totals.core, 2),
-      deep: roundTo(totals.deep, 2),
-      rem: roundTo(totals.rem, 2),
-    },
+    };
+    if (seg.source) entry.source = seg.source;
+    return entry;
   });
 }

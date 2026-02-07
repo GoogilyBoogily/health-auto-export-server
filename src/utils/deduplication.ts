@@ -1,7 +1,3 @@
-import { getDateKey as getUtcDateKey } from '../storage/fileHelpers';
-import { getDateKey as getLocalDateKey } from '../storage/obsidian/utils/dateUtilities';
-import { logger } from './logger';
-
 import type {
   Metric,
   MetricCommon,
@@ -25,6 +21,19 @@ export function buildMetricHashSet(cachedData: Map<string, MetricDailyFile>): Se
   }
 
   return hashSet;
+}
+
+/**
+ * Build a map of identity keys to array indices for O(1) upsert lookup.
+ * Used by CacheStorage to find existing metrics for update.
+ */
+export function buildMetricIdentityMap(metrics: Metric[], metricType: string): Map<string, number> {
+  const identityMap = new Map<string, number>();
+  for (const [index, metric] of metrics.entries()) {
+    const key = createMetricIdentityKey(metric, metricType);
+    identityMap.set(key, index);
+  }
+  return identityMap;
 }
 
 /**
@@ -77,24 +86,40 @@ export function createMetricHash(metric: Metric): string {
 }
 
 /**
- * Extract unique date keys from metrics.
- * Returns dates in YYYY-MM-DD format (UTC).
- * When DEBUG_LOGGING=true, logs info when UTC and local dates differ (near midnight boundary).
+ * Create a metric identity key for upsert operations.
+ * Identity is based on date + source + metricType, WITHOUT the value.
+ * This allows the same metric to be updated when Apple Health sends revised values.
+ *
+ * Identity rules:
+ * - BaseMetric: date|source|metricType
+ * - Sleep: sleepStart|source|sleep (unique per sleep session)
+ * - HeartRate/BloodPressure: date|source|metricType
+ */
+export function createMetricIdentityKey(metric: Metric, metricType: string): string {
+  const common = metric as MetricCommon;
+  const source = common.source ?? '';
+
+  // Sleep metrics use sleepStart as the unique identifier for the session
+  if ('sleepStart' in metric) {
+    const sleepStart = new Date(metric.sleepStart).toISOString();
+    return `${sleepStart}|${source}|sleep`;
+  }
+
+  // All other metrics use date
+  const date = new Date(common.date).toISOString();
+  return `${date}|${source}|${metricType}`;
+}
+
+/**
+ * Extract unique date keys from metrics using sourceDate.
+ * Returns dates in YYYY-MM-DD format based on the original data's local date.
  */
 export function extractDatesFromMetrics(metricsByType: Record<string, Metric[]>): string[] {
   const dates = new Set<string>();
 
   for (const metrics of Object.values(metricsByType)) {
     for (const metric of metrics) {
-      const metricDate = (metric as MetricCommon).date;
-      const utcKey = getUtcDateKey(metricDate);
-      dates.add(utcKey);
-
-      // Log info when UTC and local dates differ (near midnight boundary)
-      const localKey = getLocalDateKey(metricDate);
-      if (utcKey !== localKey) {
-        logger.debugDateBoundary(metricDate, utcKey, localKey, 'extractDatesFromMetrics');
-      }
+      dates.add((metric as MetricCommon).sourceDate);
     }
   }
 
@@ -102,22 +127,14 @@ export function extractDatesFromMetrics(metricsByType: Record<string, Metric[]>)
 }
 
 /**
- * Extract unique date keys from workouts.
- * Returns dates in YYYY-MM-DD format (UTC) based on workout start time.
- * When DEBUG_LOGGING=true, logs info when UTC and local dates differ (near midnight boundary).
+ * Extract unique date keys from workouts using sourceDate.
+ * Returns dates in YYYY-MM-DD format based on the original data's local date.
  */
 export function extractDatesFromWorkouts(workouts: WorkoutData[]): string[] {
   const dates = new Set<string>();
 
   for (const workout of workouts) {
-    const utcKey = getUtcDateKey(workout.start);
-    dates.add(utcKey);
-
-    // Log info when UTC and local dates differ (near midnight boundary)
-    const localKey = getLocalDateKey(workout.start);
-    if (utcKey !== localKey) {
-      logger.debugDateBoundary(workout.start, utcKey, localKey, 'extractDatesFromWorkouts');
-    }
+    dates.add(workout.sourceDate);
   }
 
   return [...dates];

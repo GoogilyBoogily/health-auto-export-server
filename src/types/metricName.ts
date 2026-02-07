@@ -45,10 +45,11 @@ export enum MetricName {
   DIETARY_MAGNESIUM = 'magnesium',
   DIETARY_MANGANESE = 'manganese',
   DIETARY_MOLYBDENUM = 'molybdenum',
-  DIETARY_MONOSATURATED_FAT = 'monosaturated_fat',
+  DIETARY_MONOUNSATURATED_FAT = 'monounsaturated_fat',
   DIETARY_NIACIN = 'niacin',
 
   DIETARY_PANTOTHENIC_ACID = 'pantothenic_acid',
+  DIETARY_PHOSPHORUS = 'phosphorus',
   DIETARY_POLYUNSATURATED_FAT = 'polyunsaturated_fat',
   DIETARY_POTASSIUM = 'potassium',
   DIETARY_PROTEIN = 'protein',

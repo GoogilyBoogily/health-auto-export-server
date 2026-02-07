@@ -1,11 +1,9 @@
+import { CacheConfig } from '../config';
 import { CacheStorage } from './CacheStorage';
 import { ObsidianStorage } from './obsidian';
 
-// Parse retention days from env (default 7)
-const retentionDays = Number.parseInt(process.env.CACHE_RETENTION_DAYS ?? '7', 10);
-
 // Create cache storage instance with configured retention
-export const cacheStorage = new CacheStorage(undefined, retentionDays);
+export const cacheStorage = new CacheStorage(undefined, CacheConfig.retentionDays);
 
 // Backward compatibility alias
 export const storage = cacheStorage;

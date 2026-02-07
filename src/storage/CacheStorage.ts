@@ -1,14 +1,13 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { CacheConfig } from '../config';
+import { CacheConfig, StorageConfig } from '../config';
 import { mapRoute, mapWorkoutData } from '../mappers';
-import { createMetricHash } from '../utils/deduplication';
+import { buildMetricIdentityMap, createMetricIdentityKey } from '../utils/deduplication';
 import { logger } from '../utils/logger';
 import {
   atomicWrite,
   ensureDirectory,
-  getDateKey,
   getFilePath,
   readJsonFile,
   readJsonFileOptional,
@@ -19,7 +18,6 @@ import type {
   Metric,
   MetricCommon,
   MetricDailyFile,
-  MetricName,
   SaveResult,
   StoredRoute,
   StoredWorkout,
@@ -38,7 +36,7 @@ export class CacheStorage {
   private retentionDays: number;
 
   constructor(dataDirectory?: string, retentionDays?: number) {
-    this.dataDirectory = dataDirectory ?? process.env.DATA_DIR ?? './data';
+    this.dataDirectory = dataDirectory ?? StorageConfig.dataDir;
     this.retentionDays = retentionDays ?? CacheConfig.retentionDays;
   }
 
@@ -52,8 +50,8 @@ export class CacheStorage {
       retentionDays: this.retentionDays,
     });
 
-    await ensureDirectory(path.join(this.dataDirectory, 'metrics'));
-    await ensureDirectory(path.join(this.dataDirectory, 'workouts'));
+    await ensureDirectory(path.join(this.dataDirectory, StorageConfig.metricsDir));
+    await ensureDirectory(path.join(this.dataDirectory, StorageConfig.workoutsDir));
 
     logger.info('Cache storage initialized', { dataDirectory: resolvedPath });
   }
@@ -153,7 +151,7 @@ export class CacheStorage {
     let cleanupSucceeded = true;
 
     // Cleanup both metrics and workouts directories
-    for (const subDirectory of ['metrics', 'workouts']) {
+    for (const subDirectory of [StorageConfig.metricsDir, StorageConfig.workoutsDir]) {
       const baseDirectory = path.join(this.dataDirectory, subDirectory);
       try {
         deletedFiles += await this.cleanupDirectory(baseDirectory, cutoffDate);
@@ -290,141 +288,19 @@ export class CacheStorage {
     return deletedCount;
   }
 
-  // === PATH HELPERS ===
+  // === SAVE METHODS ===
 
   /**
-   * Save all metrics to storage (batch operation).
-   * Groups all metrics by date first, then writes each date file once to avoid race conditions.
+   * Save pre-deduplicated metrics to cache storage.
+   * Uses identity-based upsert (date+source+type) within each file for concurrency safety.
    */
-  async saveAllMetrics(metricsByType: Record<string, Metric[]>): Promise<SaveResult> {
+  async saveMetrics(metricsByType: Record<string, Metric[]>): Promise<SaveResult> {
     // Group all metrics by date, then by type
     const byDate = new Map<string, Record<string, Metric[]>>();
 
     for (const [metricType, metrics] of Object.entries(metricsByType)) {
       for (const metric of metrics) {
-        const dateKey = getDateKey((metric as MetricCommon).date);
-        let dateMetrics = byDate.get(dateKey);
-        if (!dateMetrics) {
-          dateMetrics = {};
-          byDate.set(dateKey, dateMetrics);
-        }
-        dateMetrics[metricType] ??= [];
-        dateMetrics[metricType].push(metric);
-      }
-    }
-
-    let totalSaved = 0;
-    let totalUpdated = 0;
-    const errors: string[] = [];
-
-    // Process each date file sequentially to avoid race conditions
-    for (const [dateKey, typeMetrics] of byDate) {
-      const date = new Date(dateKey + 'T00:00:00.000Z');
-      const filePath = this.getMetricsFilePath(date);
-
-      try {
-        const result = await this.saveAllMetricsToFile(typeMetrics, filePath, dateKey);
-        totalSaved += result.saved;
-        totalUpdated += result.updated;
-      } catch (error) {
-        logger.error('Failed to save metrics to file', error, { dateKey });
-        errors.push(`${dateKey}: ${(error as Error).message}`);
-      }
-    }
-
-    logger.debug('All metrics saved to storage', {
-      filesWritten: byDate.size,
-      metricTypes: Object.keys(metricsByType).length,
-      saved: totalSaved,
-      updated: totalUpdated,
-    });
-
-    return {
-      errors: errors.length > 0 ? errors : undefined,
-      saved: totalSaved,
-      success: errors.length === 0,
-      updated: totalUpdated,
-    };
-  }
-
-  /**
-   * Save metrics to storage (single type).
-   * Groups metrics by date and performs read-merge-write for each day.
-   * NOTE: Use saveAllMetrics() when saving multiple types to avoid race conditions.
-   */
-  async saveMetrics(metricType: MetricName, metrics: Metric[]): Promise<SaveResult> {
-    if (metrics.length === 0) {
-      return { saved: 0, success: true, updated: 0 };
-    }
-
-    logger.debug('Saving metrics to storage', {
-      count: metrics.length,
-      metricType,
-    });
-
-    // Group metrics by date
-    const byDate = new Map<string, Metric[]>();
-
-    for (const metric of metrics) {
-      const dateKey = getDateKey((metric as MetricCommon).date);
-      let dateMetrics = byDate.get(dateKey);
-      if (!dateMetrics) {
-        dateMetrics = [];
-        byDate.set(dateKey, dateMetrics);
-      }
-      dateMetrics.push(metric);
-    }
-
-    let totalSaved = 0;
-    let totalUpdated = 0;
-    const errors: string[] = [];
-
-    // Process each date file
-    for (const [dateKey, dateMetrics] of byDate) {
-      const date = new Date(dateKey + 'T00:00:00.000Z');
-      const filePath = this.getMetricsFilePath(date);
-
-      try {
-        const result = await this.saveMetricsToFile(metricType, dateMetrics, filePath, dateKey);
-        totalSaved += result.saved;
-        totalUpdated += result.updated;
-      } catch (error) {
-        logger.error('Failed to save metrics to file', error, { dateKey, metricType });
-        errors.push(`${dateKey}: ${(error as Error).message}`);
-      }
-    }
-
-    logger.debug('Metrics saved to storage', {
-      filesWritten: byDate.size,
-      hasErrors: errors.length > 0,
-      metricType,
-      saved: totalSaved,
-      updated: totalUpdated,
-    });
-
-    return {
-      errors: errors.length > 0 ? errors : undefined,
-      saved: totalSaved,
-      success: errors.length === 0,
-      updated: totalUpdated,
-    };
-  }
-
-  // === DIRECT SAVE METHODS (for pre-deduplicated data) ===
-
-  /**
-   * Save metrics that have already been deduplicated upstream.
-   * Appends metrics without checking for duplicates (since caller guarantees uniqueness).
-   * Still uses file locking for concurrency safety.
-   * Use this after filterDuplicateMetrics() has already removed duplicates.
-   */
-  async saveMetricsDirectly(metricsByType: Record<string, Metric[]>): Promise<SaveResult> {
-    // Group all metrics by date, then by type
-    const byDate = new Map<string, Record<string, Metric[]>>();
-
-    for (const [metricType, metrics] of Object.entries(metricsByType)) {
-      for (const metric of metrics) {
-        const dateKey = getDateKey((metric as MetricCommon).date);
+        const dateKey = (metric as MetricCommon).sourceDate;
         let dateMetrics = byDate.get(dateKey);
         if (!dateMetrics) {
           dateMetrics = {};
@@ -452,7 +328,7 @@ export class CacheStorage {
       }
     }
 
-    logger.debug('Metrics saved directly to storage (pre-deduplicated)', {
+    logger.debug('Metrics saved to cache storage', {
       filesWritten: byDate.size,
       metricTypes: Object.keys(metricsByType).length,
       saved: totalSaved,
@@ -467,12 +343,10 @@ export class CacheStorage {
   }
 
   /**
-   * Save workouts that have already been deduplicated upstream.
-   * Appends workouts without checking for duplicates (since caller guarantees uniqueness).
-   * Still uses file locking for concurrency safety.
-   * Use this after filterDuplicateWorkouts() has already removed duplicates.
+   * Save pre-deduplicated workouts to cache storage.
+   * Uses workout ID as key for upsert within each file for concurrency safety.
    */
-  async saveWorkoutsDirectly(workouts: WorkoutData[]): Promise<SaveResult> {
+  async saveWorkouts(workouts: WorkoutData[]): Promise<SaveResult> {
     if (workouts.length === 0) {
       return { saved: 0, success: true, updated: 0 };
     }
@@ -485,7 +359,7 @@ export class CacheStorage {
     const byDate = new Map<string, WorkoutData[]>();
 
     for (const workout of workouts) {
-      const dateKey = getDateKey(workout.start);
+      const dateKey = workout.sourceDate;
       let dateWorkouts = byDate.get(dateKey);
       if (!dateWorkouts) {
         dateWorkouts = [];
@@ -511,7 +385,7 @@ export class CacheStorage {
       }
     }
 
-    logger.debug('Workouts saved directly to storage (pre-deduplicated)', {
+    logger.debug('Workouts saved to cache storage', {
       filesWritten: byDate.size,
       saved: totalSaved,
     });
@@ -524,215 +398,21 @@ export class CacheStorage {
     };
   }
 
-  // === METRICS ===
-
-  /**
-   * Save workouts to storage.
-   * Groups workouts by start date and performs read-merge-write for each day.
-   */
-  async saveWorkouts(workouts: WorkoutData[]): Promise<SaveResult> {
-    if (workouts.length === 0) {
-      return { saved: 0, success: true, updated: 0 };
-    }
-
-    logger.debug('Saving workouts to storage', { count: workouts.length });
-
-    // Group workouts by start date
-    const byDate = new Map<string, WorkoutData[]>();
-
-    for (const workout of workouts) {
-      const dateKey = getDateKey(workout.start);
-      let dateWorkouts = byDate.get(dateKey);
-      if (!dateWorkouts) {
-        dateWorkouts = [];
-        byDate.set(dateKey, dateWorkouts);
-      }
-      dateWorkouts.push(workout);
-    }
-
-    let totalSaved = 0;
-    let totalUpdated = 0;
-    const errors: string[] = [];
-
-    // Process each date file
-    for (const [dateKey, dateWorkouts] of byDate) {
-      const date = new Date(dateKey + 'T00:00:00.000Z');
-      const filePath = this.getWorkoutsFilePath(date);
-
-      try {
-        const result = await this.saveWorkoutsToFile(dateWorkouts, filePath, dateKey);
-        totalSaved += result.saved;
-        totalUpdated += result.updated;
-      } catch (error) {
-        logger.error('Failed to save workouts to file', error, { dateKey });
-        errors.push(`${dateKey}: ${(error as Error).message}`);
-      }
-    }
-
-    logger.debug('Workouts saved to storage', {
-      filesWritten: byDate.size,
-      hasErrors: errors.length > 0,
-      saved: totalSaved,
-      updated: totalUpdated,
-    });
-
-    return {
-      errors: errors.length > 0 ? errors : undefined,
-      saved: totalSaved,
-      success: errors.length === 0,
-      updated: totalUpdated,
-    };
-  }
+  // === PATH HELPERS ===
 
   private getMetricsFilePath(date: Date): string {
-    return getFilePath(path.join(this.dataDirectory, 'metrics'), date);
+    return getFilePath(path.join(this.dataDirectory, StorageConfig.metricsDir), date);
   }
 
   private getWorkoutsFilePath(date: Date): string {
-    return getFilePath(path.join(this.dataDirectory, 'workouts'), date);
+    return getFilePath(path.join(this.dataDirectory, StorageConfig.workoutsDir), date);
   }
 
-  private async saveAllMetricsToFile(
-    typeMetrics: Record<string, Metric[]>,
-    filePath: string,
-    dateKey: string,
-  ): Promise<{ saved: number; updated: number }> {
-    // Use file locking to prevent race conditions on concurrent writes
-    return withLock(filePath, async () => {
-      const content = await readJsonFile<MetricDailyFile>(filePath, {
-        date: dateKey,
-        metrics: {},
-        version: 1,
-      });
-
-      let saved = 0;
-      let updated = 0;
-
-      for (const [metricType, metrics] of Object.entries(typeMetrics)) {
-        content.metrics[metricType] ??= [];
-
-        // Build lookup map for O(1) deduplication
-        const existingMap = new Map<string, number>();
-        for (const [index, m] of content.metrics[metricType].entries()) {
-          existingMap.set(createMetricHash(m), index);
-        }
-
-        for (const metric of metrics) {
-          const key = createMetricHash(metric);
-          const existingIndex = existingMap.get(key);
-
-          if (existingIndex === undefined) {
-            content.metrics[metricType].push(metric);
-            existingMap.set(key, content.metrics[metricType].length - 1);
-            saved++;
-          } else {
-            content.metrics[metricType][existingIndex] = metric;
-            updated++;
-          }
-        }
-      }
-
-      await atomicWrite(filePath, content);
-      return { saved, updated };
-    });
-  }
-
-  // === WORKOUTS ===
-
-  private async saveMetricsToFile(
-    metricType: MetricName,
-    metrics: Metric[],
-    filePath: string,
-    dateKey: string,
-  ): Promise<{ saved: number; updated: number }> {
-    // Use file locking to prevent race conditions on concurrent writes
-    return withLock(filePath, async () => {
-      const content = await readJsonFile<MetricDailyFile>(filePath, {
-        date: dateKey,
-        metrics: {},
-        version: 1,
-      });
-
-      content.metrics[metricType] ??= [];
-
-      // Build lookup map for O(1) deduplication
-      const existingMap = new Map<string, number>();
-      for (const [index, m] of content.metrics[metricType].entries()) {
-        existingMap.set(createMetricHash(m), index);
-      }
-
-      let saved = 0;
-      let updated = 0;
-
-      for (const metric of metrics) {
-        const key = createMetricHash(metric);
-        const existingIndex = existingMap.get(key);
-
-        if (existingIndex === undefined) {
-          content.metrics[metricType].push(metric);
-          existingMap.set(key, content.metrics[metricType].length - 1);
-          saved++;
-        } else {
-          content.metrics[metricType][existingIndex] = metric;
-          updated++;
-        }
-      }
-
-      await atomicWrite(filePath, content);
-      return { saved, updated };
-    });
-  }
-
-  private async saveWorkoutsToFile(
-    workouts: WorkoutData[],
-    filePath: string,
-    dateKey: string,
-  ): Promise<{ saved: number; updated: number }> {
-    // Use file locking to prevent race conditions on concurrent writes
-    return withLock(filePath, async () => {
-      const content = await readJsonFile<WorkoutDailyFile>(filePath, {
-        date: dateKey,
-        routes: {},
-        version: 1,
-        workouts: {},
-      });
-
-      let saved = 0;
-      let updated = 0;
-
-      for (const workout of workouts) {
-        // Check if updating or inserting
-        if (workout.id in content.workouts) {
-          updated++;
-        } else {
-          saved++;
-        }
-
-        // Upsert workout
-        const mappedWorkout = mapWorkoutData(workout);
-        content.workouts[workout.id] = mappedWorkout as StoredWorkout;
-
-        // Upsert route if present
-        if (workout.route && workout.route.length > 0) {
-          const mappedRoute = mapRoute(workout);
-          content.routes[workout.id] = mappedRoute as StoredRoute;
-        }
-      }
-
-      await atomicWrite(filePath, content);
-      return { saved, updated };
-    });
-  }
-
-  // === DIRECT APPEND HELPERS (for pre-deduplicated data) ===
+  // === SAVE HELPERS ===
 
   /**
-   * Append metrics to file with re-deduplication inside the lock.
-   * Called by saveMetricsDirectly() after upstream deduplication.
-   *
-   * Re-checks for duplicates inside the lock to handle race conditions
-   * where two concurrent requests both pass upstream dedup but one
-   * writes before the other acquires the lock.
+   * Upsert metrics to file using identity-based deduplication.
+   * Uses identity key (date+source+type) to find existing metrics for update.
    */
   private async appendMetricsToFile(
     typeMetrics: Record<string, Metric[]>,
@@ -752,21 +432,23 @@ export class CacheStorage {
       for (const [metricType, metrics] of Object.entries(typeMetrics)) {
         content.metrics[metricType] ??= [];
 
-        // Build lookup map for O(1) deduplication (re-check inside lock)
-        const existingMap = new Map<string, number>();
-        for (const [index, m] of content.metrics[metricType].entries()) {
-          existingMap.set(createMetricHash(m), index);
-        }
+        // Build identity map for O(1) upsert lookup (date+source+type, no value)
+        const identityMap = buildMetricIdentityMap(content.metrics[metricType], metricType);
 
-        // Only append metrics that don't already exist
         for (const metric of metrics) {
-          const key = createMetricHash(metric);
-          if (!existingMap.has(key)) {
+          const identityKey = createMetricIdentityKey(metric, metricType);
+          const existingIndex = identityMap.get(identityKey);
+
+          if (existingIndex === undefined) {
+            // New metric - append
             content.metrics[metricType].push(metric);
-            existingMap.set(key, content.metrics[metricType].length - 1);
+            identityMap.set(identityKey, content.metrics[metricType].length - 1);
             saved++;
+          } else {
+            // Existing metric - update with latest value (upsert)
+            content.metrics[metricType][existingIndex] = metric;
+            // Note: Not counting as "saved" since it's an update
           }
-          // Skip duplicates silently (race condition from concurrent requests)
         }
       }
 
@@ -776,8 +458,7 @@ export class CacheStorage {
   }
 
   /**
-   * Append workouts directly to file without deduplication checks.
-   * Called by saveWorkoutsDirectly() after upstream deduplication.
+   * Append workouts to file using workout ID as upsert key.
    */
   private async appendWorkoutsToFile(
     workouts: WorkoutData[],

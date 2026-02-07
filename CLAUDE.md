@@ -88,13 +88,14 @@ All configurable values are centralized in `src/config.ts`. This includes:
 - **ServerConfig**: Port, host, body size limit, shutdown timeout
 - **RequestConfig**: Request processing timeout
 - **AuthConfig**: Token prefix, header name, env var name
-- **RateLimitConfig**: Max requests, window duration, skip paths
+- **RateLimitConfig**: Max requests, window duration, skip paths, computed cleanup interval
 - **CorsConfig**: Allowed headers, methods, origins env var
-- **FileLockConfig**: Retry delays, max retries, stale timeout
+- **FileLockConfig**: Retry delays, max retries, stale timeout, computed total wait time
 - **CacheConfig**: Retention days, max cleanup failures, file patterns
 - **RetryConfig**: Max retries, base delay, cleanup debounce
-- **ObsidianConfig**: Tracking paths, body templates, frontmatter patterns
-- **MetricsConfig**: Session gap threshold, valid sleep stages
+- **ObsidianConfig**: Tracking paths (env-configurable), body templates (env-configurable), frontmatter patterns
+- **MetricsConfig**: Session gap threshold (env-configurable), valid sleep stages
+- **StorageConfig**: Data directory, metrics/workouts subdirectory names
 
 To customize behavior, edit `config.ts` directly. Values marked with `@env` can be overridden via environment variables.
 
@@ -113,13 +114,32 @@ Key rules:
 ## Environment Variables
 
 ```bash
-API_TOKEN            # Required - API auth token (must start with "sk-")
-OBSIDIAN_VAULT_PATH  # Required - Path to Obsidian vault for Markdown output
-NODE_ENV             # Optional - development|production (default: development)
-DATA_DIR             # Optional - Data directory (default: ./data)
-PORT                 # Optional - Server port (default: 3001)
-LOG_LEVEL            # Optional - debug|info|warn|error (default: debug)
-DEBUG_LOGGING        # Optional - true|false - Enable verbose debug logging (default: false)
+# Required
+API_TOKEN            # API auth token (must start with "sk-")
+OBSIDIAN_VAULT_PATH  # Path to Obsidian vault for Markdown output
+
+# Optional - Server
+NODE_ENV             # development|production (default: development)
+DATA_DIR             # Data directory (default: ./data)
+PORT                 # Server port (default: 3001)
+LOG_LEVEL            # debug|info|warn|error (default: debug)
+DEBUG_LOGGING        # true|false - Enable verbose debug logging (default: false)
+
+# Optional - Cache
+CACHE_RETENTION_DAYS # Days to keep cache data (default: 7, 0 disables cleanup)
+
+# Optional - Metrics
+SLEEP_SESSION_GAP_MINUTES  # Gap threshold for sleep sessions in minutes (default: 30)
+
+# Optional - Obsidian paths (relative to OBSIDIAN_VAULT_PATH)
+OBSIDIAN_HEALTH_PATH   # Health tracking folder (default: 70-79 Journals & Self-Tracking/79 Health Tracking)
+OBSIDIAN_SLEEP_PATH    # Sleep tracking folder (default: 70-79 Journals & Self-Tracking/78 Sleep Tracking)
+OBSIDIAN_WORKOUT_PATH  # Workout tracking folder (default: 70-79 Journals & Self-Tracking/77 Workout Tracking)
+
+# Optional - Obsidian body templates (use \n for newlines in env vars)
+OBSIDIAN_HEALTH_TEMPLATE   # Health file body template (default: # {{date}}\n\n## Health Metrics)
+OBSIDIAN_SLEEP_TEMPLATE    # Sleep file body template (default: \n## Sleep Log)
+OBSIDIAN_WORKOUT_TEMPLATE  # Workout file body template (default: \n\n## Workout Log)
 ```
 
 Run `./create-env.sh` to generate a `.env` with a secure token.

@@ -24,6 +24,8 @@ import type {
 // Valid sleep stage values from Health Auto Export
 const VALID_SLEEP_STAGES_SET = new Set<string>(MetricsConfig.validSleepStages);
 
+const DATE_PREFIX_REGEX = /^(\d{4}-\d{2}-\d{2})/;
+
 /**
  * Request-scoped context for tracking validation stats.
  * Prevents race conditions from module-level mutable state.
@@ -82,6 +84,23 @@ export function logValidationWarning(context: MappingContext): void {
       },
     );
   }
+}
+
+/**
+ * Extract the local date (YYYY-MM-DD) from a raw date string.
+ * Preserves the user's intended date without timezone conversion.
+ * Falls back to server-local Date extraction for non-standard formats.
+ */
+function extractSourceDate(dateString: Date | string): string {
+  if (typeof dateString === 'string') {
+    const match = DATE_PREFIX_REGEX.exec(dateString);
+    if (match) return match[1];
+  }
+  const d = new Date(dateString);
+  const year = String(d.getFullYear());
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 /**
@@ -185,11 +204,13 @@ function isValidSleepStage(value: unknown): value is SleepStageValue {
  * Convert uppercase sleep stage value to lowercase.
  * Only accepts validated SleepStageValue inputs.
  */
-function toLowercaseStage(value: SleepStageValue): SleepStage {
-  const stageMap: Record<SleepStageValue, SleepStage> = {
+function toLowercaseStage(value: SleepStageValue): SleepStage | 'inBed' {
+  const stageMap: Record<SleepStageValue, SleepStage | 'inBed'> = {
+    Asleep: 'asleep',
     Awake: 'awake',
     Core: 'core',
     Deep: 'deep',
+    'In Bed': 'inBed',
     REM: 'rem',
   };
   return stageMap[value];
@@ -221,6 +242,7 @@ export const mapMetric = (
             metadata: measurement.metadata,
             qty: measurement.qty,
             source: measurement.source,
+            sourceDate: extractSourceDate(measurement.date),
             units: metric.units,
           };
         });
@@ -237,6 +259,7 @@ export const mapMetric = (
             diastolic: measurement.diastolic,
             metadata: measurement.metadata,
             source: measurement.source,
+            sourceDate: extractSourceDate(measurement.date),
             systolic: measurement.systolic,
             units: metric.units,
           };
@@ -256,6 +279,7 @@ export const mapMetric = (
             metadata: measurement.metadata,
             Min: measurement.Min,
             source: measurement.source,
+            sourceDate: extractSourceDate(measurement.date),
             units: metric.units,
           };
         });
@@ -286,6 +310,7 @@ export const mapMetric = (
         sleepEnd: new Date(measurement.sleepEnd),
         sleepStart: new Date(measurement.sleepStart),
         source: measurement.source,
+        sourceDate: extractSourceDate(measurement.sleepEnd),
         totalSleep: measurement.totalSleep,
         units: metric.units,
       }));
@@ -302,6 +327,7 @@ export const mapMetric = (
             metadata: measurement.metadata,
             qty: measurement.qty,
             source: measurement.source,
+            sourceDate: extractSourceDate(measurement.date),
             units: metric.units,
           };
         });
@@ -344,40 +370,57 @@ function aggregateSegments(
     const first = session[0];
     const last = session.at(-1) ?? first;
 
+    // Separate "In Bed" segments (bed window metadata) from sleep stage segments
+    const inBedSegments = session.filter((seg) => seg.value === 'In Bed');
+    const sleepSegments = session.filter((seg) => seg.value !== 'In Bed');
+
     // Aggregate by stage type
-    const totals = { Awake: 0, Core: 0, Deep: 0, REM: 0 };
-    for (const seg of session) {
-      totals[seg.value] += seg.qty;
+    const totals = { Asleep: 0, Awake: 0, Core: 0, Deep: 0, REM: 0 };
+    for (const seg of sleepSegments) {
+      totals[seg.value as keyof typeof totals] += seg.qty;
     }
 
-    const sleepStart = new Date(first.startDate);
-    const sleepEnd = new Date(last.endDate);
-    const inBedHours = (sleepEnd.getTime() - sleepStart.getTime()) / (1000 * 60 * 60);
-    const asleepHours = totals.Core + totals.Deep + totals.REM;
+    // Use "In Bed" segments for bed window if available, otherwise fall back to sleep segments
+    const bedStart =
+      inBedSegments.length > 0 ? new Date(inBedSegments[0].startDate) : new Date(first.startDate);
+    const bedEnd =
+      inBedSegments.length > 0
+        ? new Date((inBedSegments.at(-1) ?? inBedSegments[0]).endDate)
+        : new Date(last.endDate);
 
-    // Convert raw segments to typed SleepSegment objects
-    // Stage is already validated in isValidSleepSegment
-    const mappedSegments: SleepSegment[] = session.map((seg) => ({
-      duration: seg.qty, // Already in hours
+    const sleepFirst = sleepSegments[0] ?? first;
+    const sleepLast = sleepSegments.at(-1) ?? last;
+    const sleepStart = new Date(sleepFirst.startDate);
+    const sleepEnd = new Date(sleepLast.endDate);
+
+    const inBedHours = (bedEnd.getTime() - bedStart.getTime()) / (1000 * 60 * 60);
+    const asleepHours = totals.Asleep + totals.Core + totals.Deep + totals.REM;
+
+    // Convert sleep segments (excluding "In Bed") to typed SleepSegment objects
+    const mappedSegments: SleepSegment[] = sleepSegments.map((seg) => ({
+      duration: seg.qty,
       endTime: new Date(seg.endDate),
-      stage: toLowercaseStage(seg.value),
+      source: seg.source,
+      stage: toLowercaseStage(seg.value) as SleepStage,
       startTime: new Date(seg.startDate),
     }));
 
     return {
+      asleep: totals.Asleep > 0 ? totals.Asleep : undefined,
       awake: totals.Awake,
       core: totals.Core,
       date: sleepStart,
       deep: totals.Deep,
       inBed: inBedHours,
-      inBedEnd: sleepEnd,
-      inBedStart: sleepStart,
+      inBedEnd: bedEnd,
+      inBedStart: bedStart,
       rem: totals.REM,
-      segmentCount: session.length,
+      segmentCount: sleepSegments.length,
       segments: mappedSegments,
       sleepEnd,
       sleepStart,
       source: first.source,
+      sourceDate: extractSourceDate(sleepLast.endDate),
       totalSleep: asleepHours,
       units,
     };

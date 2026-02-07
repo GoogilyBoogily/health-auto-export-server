@@ -36,6 +36,7 @@ export type Metric =
  */
 export interface MetricCommon {
   date: Date;
+  sourceDate: string; // YYYY-MM-DD extracted from raw date string before timezone conversion
   metadata?: Record<string, string>;
   source?: string;
 }
@@ -72,6 +73,7 @@ export interface SleepSegment {
   endTime: Date;
   stage: SleepStage;
   startTime: Date;
+  source?: string;
 }
 
 /**
@@ -82,19 +84,19 @@ export interface SleepSegmentRaw {
   endDate: string;
   qty: number;
   startDate: string;
-  value: 'Awake' | 'Core' | 'Deep' | 'REM';
+  value: 'Asleep' | 'Awake' | 'Core' | 'Deep' | 'In Bed' | 'REM';
   source?: string;
 }
 
 /**
  * Lowercase sleep stage types for output formatting.
  */
-export type SleepStage = 'awake' | 'core' | 'deep' | 'rem';
+export type SleepStage = 'asleep' | 'awake' | 'core' | 'deep' | 'rem';
 
 /**
  * Sleep stage value types from Health Auto Export.
  */
-export type SleepStageValue = 'Awake' | 'Core' | 'Deep' | 'REM';
+export type SleepStageValue = 'Asleep' | 'Awake' | 'Core' | 'Deep' | 'In Bed' | 'REM';
 
 /**
  * Wrist temperature metric from Apple Watch during sleep.

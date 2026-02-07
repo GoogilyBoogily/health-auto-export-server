@@ -65,6 +65,7 @@ export interface WorkoutData {
   end: Date;
   id: string;
   name: string;
+  sourceDate: string; // YYYY-MM-DD extracted from raw start date string before timezone conversion
   start: Date;
   activeEnergy?: IQuantityMetric[];
   activeEnergyBurned?: IMeasurement | ISimpleMeasurement;

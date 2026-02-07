@@ -191,7 +191,7 @@ export const saveMetrics = async (
     }
 
     // 6. Only on Obsidian success: Save NEW metrics to cache (pre-deduplicated)
-    const cacheResult = await cacheStorage.saveMetricsDirectly(newMetrics);
+    const cacheResult = await cacheStorage.saveMetrics(newMetrics);
 
     // 7. Trigger cache cleanup (debounced)
     scheduleCleanup(log);
