@@ -6,6 +6,8 @@ import type {
   HealthFrontmatter,
   Metric,
   MetricCommon,
+  SleepFrontmatter,
+  SleepMetric,
   WorkoutData,
   WorkoutFrontmatter,
 } from '../types';
@@ -94,6 +96,52 @@ export function filterDuplicateMetrics(
 }
 
 /**
+ * Filter sleep metrics to remove duplicates that already exist in Obsidian frontmatter.
+ * Compares by segment startTime — if all segments from a sleep entry already exist, it's a duplicate.
+ *
+ * Like health dedup, this is an optimization. The sleep formatter replaces all data
+ * for a date, so passing a duplicate through results in an identical file write.
+ */
+export function filterDuplicateSleepMetrics(
+  incomingSleepMetrics: SleepMetric[],
+  existingFrontmatter: Map<string, SleepFrontmatter>,
+): {
+  duplicateCount: number;
+  newCount: number;
+  newSleepMetrics: SleepMetric[];
+} {
+  const existingStartTimes = buildExistingSleepStartTimes(existingFrontmatter);
+  const newSleepMetrics: SleepMetric[] = [];
+  let duplicateCount = 0;
+
+  for (const metric of incomingSleepMetrics) {
+    const existingTimes = existingStartTimes.get(metric.sourceDate);
+
+    if (!existingTimes || !metric.segments || metric.segments.length === 0) {
+      newSleepMetrics.push(metric);
+      continue;
+    }
+
+    const allExist = metric.segments.every((segment) => {
+      const isoTime = formatIsoTimestamp(segment.startTime);
+      return isoTime ? existingTimes.has(isoTime) : false;
+    });
+
+    if (allExist) {
+      duplicateCount++;
+    } else {
+      newSleepMetrics.push(metric);
+    }
+  }
+
+  return {
+    duplicateCount,
+    newCount: newSleepMetrics.length,
+    newSleepMetrics,
+  };
+}
+
+/**
  * Filter workouts to remove those already in Obsidian frontmatter.
  * Compares by appleWorkoutId — if an entry with the same ID exists, it's a duplicate.
  */
@@ -144,6 +192,24 @@ function addTimestampsFromReadings(
       existing.add((reading as { time: string }).time);
     }
   }
+}
+
+/**
+ * Build a set of existing sleep stage startTimes per date from sleep frontmatter.
+ */
+function buildExistingSleepStartTimes(
+  existingFrontmatter: Map<string, SleepFrontmatter>,
+): Map<string, Set<string>> {
+  const startTimesByDate = new Map<string, Set<string>>();
+
+  for (const [dateKey, frontmatter] of existingFrontmatter) {
+    if (frontmatter.sleepStages) {
+      const times = new Set(frontmatter.sleepStages.map((stage) => stage.startTime));
+      startTimesByDate.set(dateKey, times);
+    }
+  }
+
+  return startTimesByDate;
 }
 
 /**

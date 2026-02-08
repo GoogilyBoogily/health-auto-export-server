@@ -58,6 +58,30 @@ export class ObsidianStorage {
   }
 
   /**
+   * Read sleep frontmatter for the given date keys.
+   * Returns a map of dateKey → SleepFrontmatter for dates that have existing files.
+   */
+  async readSleepFrontmatter(dateKeys: string[]): Promise<Map<string, SleepFrontmatter>> {
+    const result = new Map<string, SleepFrontmatter>();
+
+    const entries = await Promise.all(
+      dateKeys.map(async (dateKey) => {
+        const filePath = getTrackingFilePath(this.vaultPath, 'sleep', dateKey);
+        const existing = await readMarkdownFile(filePath);
+        return { dateKey, frontmatter: existing?.frontmatter };
+      }),
+    );
+
+    for (const { dateKey, frontmatter } of entries) {
+      if (frontmatter && 'date' in frontmatter && !('type' in frontmatter)) {
+        result.set(dateKey, frontmatter);
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * Read workout frontmatter for the given date keys.
    * Returns a map of dateKey → WorkoutFrontmatter for dates that have existing files.
    */

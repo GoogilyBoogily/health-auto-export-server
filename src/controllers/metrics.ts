@@ -6,11 +6,17 @@ import {
   mapMetric,
 } from '../mappers';
 import { getObsidianStorage } from '../storage';
-import { extractDatesFromMetrics, filterDuplicateMetrics } from '../utils/deduplication';
+import { isSleepMetric } from '../storage/obsidian/formatters/sleep';
+import { MetricName } from '../types';
+import {
+  extractDatesFromMetrics,
+  filterDuplicateMetrics,
+  filterDuplicateSleepMetrics,
+} from '../utils/deduplication';
 import { Logger } from '../utils/logger';
 import { withRetry } from '../utils/retry';
 
-import type { IngestData, IngestResponse, Metric } from '../types';
+import type { IngestData, IngestResponse, Metric, SleepMetric } from '../types';
 
 export const saveMetrics = async (
   ingestData: IngestData,
@@ -70,36 +76,12 @@ export const saveMetrics = async (
     log?.debugLog('TRANSFORM', 'Metrics transformed and grouped', { byType: transformSummary });
 
     // === DEDUPLICATION FLOW ===
-
-    // 1. Extract dates from incoming metrics
-    const incomingDates = extractDatesFromMetrics(metricsByType);
-    log?.debug('Incoming metric dates', { dates: incomingDates });
-
-    // 2. Read existing Obsidian frontmatter for those dates
-    const obsidianStorage = getObsidianStorage();
-    const existingFrontmatter = await obsidianStorage.readHealthFrontmatter(incomingDates);
-    log?.debug('Existing frontmatter loaded', { datesWithData: existingFrontmatter.size });
-
-    // 3. Filter duplicates by comparing timestamps
-    const { duplicateCount, newCount, newMetrics } = filterDuplicateMetrics(
+    const { duplicateCount, newCount, newMetrics } = await deduplicateAllMetrics(
       metricsByType,
-      existingFrontmatter,
+      log,
     );
-    log?.debug('Deduplication complete', { duplicateCount, newCount });
 
-    // Debug: Log detailed deduplication results
-    const newMetricsSummary = Object.entries(newMetrics).map(([name, metrics]) => ({
-      count: metrics.length,
-      name,
-    }));
-    log?.debugDedup('Metrics deduplication', {
-      duplicateCount,
-      inputCount: Object.values(metricsByType).reduce((sum, m) => sum + m.length, 0),
-      newCount,
-    });
-    log?.debugLog('DEDUP', 'New metrics after deduplication', { byType: newMetricsSummary });
-
-    // 4. If all data is duplicates, return early
+    // If all data is duplicates, return early
     if (newCount === 0) {
       response.metrics = {
         message: `All ${String(duplicateCount)} metrics were duplicates, nothing new to save`,
@@ -109,7 +91,7 @@ export const saveMetrics = async (
       return response;
     }
 
-    // 5. Write to Obsidian with retry logic
+    // Write to Obsidian with retry logic
     // Debug: Log what we're about to write to Obsidian
     log?.debugStorage('Preparing Obsidian write', {
       data: Object.entries(newMetrics).map(([name, metrics]) => ({
@@ -118,6 +100,8 @@ export const saveMetrics = async (
       })),
       fileType: 'metrics',
     });
+
+    const obsidianStorage = getObsidianStorage();
 
     try {
       const obsidianResult = await withRetry(() => obsidianStorage.saveMetrics(newMetrics), {
@@ -181,3 +165,67 @@ export const saveMetrics = async (
     return errorResponse;
   }
 };
+
+/**
+ * Partition metrics into health and sleep, dedup each against their respective
+ * Obsidian directories, and merge the results.
+ */
+async function deduplicateAllMetrics(
+  metricsByType: Record<string, Metric[]>,
+  log?: Logger,
+): Promise<{ duplicateCount: number; newCount: number; newMetrics: Record<string, Metric[]> }> {
+  // Partition into health and sleep (they live in separate directories)
+  const healthMetrics: Record<string, Metric[]> = {};
+  const sleepMetrics: SleepMetric[] = [];
+
+  for (const [key, metrics] of Object.entries(metricsByType)) {
+    if (isSleepMetric(key)) {
+      sleepMetrics.push(...(metrics as SleepMetric[]));
+    } else {
+      healthMetrics[key] = metrics;
+    }
+  }
+
+  // Read existing frontmatter for both paths in parallel
+  const obsidianStorage = getObsidianStorage();
+  const healthDates = extractDatesFromMetrics(healthMetrics);
+  const sleepDates = [...new Set(sleepMetrics.map((m) => m.sourceDate))];
+
+  const [existingHealthFrontmatter, existingSleepFrontmatter] = await Promise.all([
+    obsidianStorage.readHealthFrontmatter(healthDates),
+    obsidianStorage.readSleepFrontmatter(sleepDates),
+  ]);
+
+  log?.debug('Existing frontmatter loaded', {
+    healthDatesWithData: existingHealthFrontmatter.size,
+    sleepDatesWithData: existingSleepFrontmatter.size,
+  });
+
+  // Filter duplicates for each path
+  const healthDedup = filterDuplicateMetrics(healthMetrics, existingHealthFrontmatter);
+  const sleepDedup = filterDuplicateSleepMetrics(sleepMetrics, existingSleepFrontmatter);
+
+  // Merge results
+  const newMetrics: Record<string, Metric[]> = { ...healthDedup.newMetrics };
+  if (sleepDedup.newSleepMetrics.length > 0) {
+    newMetrics[MetricName.SLEEP_ANALYSIS] = sleepDedup.newSleepMetrics;
+  }
+
+  const duplicateCount = healthDedup.duplicateCount + sleepDedup.duplicateCount;
+  const newCount = healthDedup.newCount + sleepDedup.newCount;
+  log?.debug('Deduplication complete', { duplicateCount, newCount });
+
+  // Debug: Log detailed deduplication results
+  const newMetricsSummary = Object.entries(newMetrics).map(([name, metrics]) => ({
+    count: metrics.length,
+    name,
+  }));
+  log?.debugDedup('Metrics deduplication', {
+    duplicateCount,
+    inputCount: Object.values(metricsByType).reduce((sum, m) => sum + m.length, 0),
+    newCount,
+  });
+  log?.debugLog('DEDUP', 'New metrics after deduplication', { byType: newMetricsSummary });
+
+  return { duplicateCount, newCount, newMetrics };
+}
