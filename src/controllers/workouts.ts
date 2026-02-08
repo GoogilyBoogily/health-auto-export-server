@@ -1,45 +1,11 @@
 import { RetryConfig } from '../config';
 import { prepareWorkouts } from '../mappers';
-import { cacheStorage, getObsidianStorage } from '../storage';
+import { getObsidianStorage } from '../storage';
 import { extractDatesFromWorkouts, filterDuplicateWorkouts } from '../utils/deduplication';
 import { Logger } from '../utils/logger';
 import { withRetry } from '../utils/retry';
 
 import type { IngestData, IngestResponse } from '../types';
-
-// === CLEANUP DEBOUNCING ===
-// Prevents overlapping cleanup runs from concurrent requests
-let cleanupScheduled = false;
-
-/**
- * Schedule cache cleanup with debouncing to prevent overlapping runs.
- */
-function scheduleCleanup(log?: Logger): void {
-  if (cleanupScheduled) {
-    return;
-  }
-
-  cleanupScheduled = true;
-  const timeout = setTimeout(() => {
-    cleanupScheduled = false;
-    cacheStorage
-      .cleanupExpiredCache()
-      .then((result) => {
-        if (result.deletedFiles > 0) {
-          log?.info('Cache cleanup completed', result);
-        }
-        return result;
-      })
-      .catch((error: unknown) => {
-        log?.error('Cache cleanup failed', {
-          error: error instanceof Error ? error.message : 'Unknown',
-        });
-      });
-  }, RetryConfig.cleanupDebounceMs);
-
-  // Don't block process exit
-  timeout.unref();
-}
 
 export const saveWorkouts = async (
   ingestData: IngestData,
@@ -83,12 +49,16 @@ export const saveWorkouts = async (
     const incomingDates = extractDatesFromWorkouts(workouts);
     log?.debug('Incoming workout dates', { dates: incomingDates });
 
-    // 2. Read cache for those dates
-    const cachedData = await cacheStorage.getWorkoutsForDates(incomingDates);
-    log?.debug('Cache data loaded', { cachedDates: cachedData.size });
+    // 2. Read existing Obsidian frontmatter for those dates
+    const obsidianStorage = getObsidianStorage();
+    const existingFrontmatter = await obsidianStorage.readWorkoutFrontmatter(incomingDates);
+    log?.debug('Existing frontmatter loaded', { datesWithData: existingFrontmatter.size });
 
-    // 3. Filter duplicates by workoutId
-    const { duplicateCount, newCount, newWorkouts } = filterDuplicateWorkouts(workouts, cachedData);
+    // 3. Filter duplicates by appleWorkoutId
+    const { duplicateCount, newCount, newWorkouts } = filterDuplicateWorkouts(
+      workouts,
+      existingFrontmatter,
+    );
     log?.debug('Deduplication complete', { duplicateCount, newCount });
 
     // Debug: Log detailed deduplication results
@@ -116,10 +86,7 @@ export const saveWorkouts = async (
       return response;
     }
 
-    // 5. Write to Obsidian FIRST (authoritative store) with retry logic
-    const obsidianStorage = getObsidianStorage();
-    let obsidianSaved: number;
-
+    // 5. Write to Obsidian with retry logic
     // Debug: Log what we're about to write to Obsidian
     log?.debugStorage('Preparing Obsidian write', {
       data: newWorkouts.map((w) => ({
@@ -137,16 +104,14 @@ export const saveWorkouts = async (
         maxRetries: RetryConfig.maxRetries,
         operationName: 'Obsidian write',
       });
-      obsidianSaved = obsidianResult.saved;
 
       // Debug: Log Obsidian write result
       log?.debugStorage('Obsidian write completed', {
-        metadata: { saved: obsidianSaved, updated: obsidianResult.updated },
+        metadata: { saved: obsidianResult.saved, updated: obsidianResult.updated },
       });
     } catch (error) {
-      // Obsidian failed after all retries - do NOT update cache, return error
       const obsidianError = error instanceof Error ? error.message : 'Unknown Obsidian error';
-      log?.error('Obsidian storage failed after all retries, cache not updated', {
+      log?.error('Obsidian storage failed after all retries', {
         error: obsidianError,
         retries: RetryConfig.maxRetries,
       });
@@ -165,21 +130,14 @@ export const saveWorkouts = async (
       };
     }
 
-    // 6. Only on Obsidian success: Save NEW workouts to cache (pre-deduplicated)
-    const cacheResult = await cacheStorage.saveWorkouts(newWorkouts);
-
-    // 7. Trigger cache cleanup (debounced)
-    scheduleCleanup(log);
-
     response.workouts = {
-      message: `${String(cacheResult.saved)} new workouts saved, ${String(duplicateCount)} duplicates skipped`,
+      message: `${String(newCount)} new workouts saved, ${String(duplicateCount)} duplicates skipped`,
       success: true,
     };
 
     timer?.end('info', 'Workouts saved', {
       duplicatesSkipped: duplicateCount,
-      newWorkoutsSaved: cacheResult.saved,
-      obsidianSaved,
+      newWorkoutsSaved: newCount,
     });
 
     return response;

@@ -10,7 +10,6 @@
  * - RateLimit: Request rate limiting
  * - CORS: Cross-origin resource sharing
  * - FileLock: File locking for concurrent writes
- * - Cache: Cache storage and cleanup
  * - Retry: Retry logic for storage operations
  * - Obsidian: Obsidian vault integration paths and templates
  * - Metrics: Metric processing settings
@@ -226,40 +225,6 @@ export const FileLockConfig = {
 } as const;
 
 // =============================================================================
-// CACHE CONFIGURATION
-// =============================================================================
-
-export const CacheConfig = {
-  /**
-   * Number of days to retain cache data.
-   * Data older than this will be deleted during cleanup.
-   * Set to 0 to disable retention/cleanup.
-   * @env CACHE_RETENTION_DAYS
-   * @default 7
-   */
-  retentionDays: parseIntSafe(process.env.CACHE_RETENTION_DAYS, 7, 'CACHE_RETENTION_DAYS'),
-
-  /**
-   * Maximum consecutive cleanup failures before throwing an error.
-   * Prevents silent disk filling if cleanup consistently fails.
-   * @default 5
-   */
-  maxCleanupFailures: 5,
-
-  /**
-   * Directory structure patterns for cache files.
-   */
-  patterns: {
-    /** Year directory pattern (e.g., "2024") */
-    yearRegex: /^\d{4}$/,
-    /** Month directory pattern (e.g., "01", "12") */
-    monthRegex: /^\d{2}$/,
-    /** Date file pattern (e.g., "2024-01-15.json") */
-    dateFileRegex: /^(\d{4}-\d{2}-\d{2})\.json$/,
-  },
-} as const;
-
-// =============================================================================
 // RETRY CONFIGURATION
 // =============================================================================
 
@@ -276,13 +241,6 @@ export const RetryConfig = {
    * @default 1000
    */
   baseDelayMs: 1000,
-
-  /**
-   * Debounce interval for cache cleanup in milliseconds.
-   * Prevents overlapping cleanup runs from concurrent requests.
-   * @default 5000
-   */
-  cleanupDebounceMs: 5000,
 } as const;
 
 // =============================================================================
@@ -358,31 +316,6 @@ export const MetricsConfig = {
 } as const;
 
 // =============================================================================
-// STORAGE CONFIGURATION
-// =============================================================================
-
-export const StorageConfig = {
-  /**
-   * Default data directory for cache storage.
-   * @env DATA_DIR
-   * @default './data'
-   */
-  dataDir: process.env.DATA_DIR ?? './data',
-
-  /**
-   * Subdirectory name for metrics data.
-   * @default 'metrics'
-   */
-  metricsDir: 'metrics',
-
-  /**
-   * Subdirectory name for workouts data.
-   * @default 'workouts'
-   */
-  workoutsDir: 'workouts',
-} as const;
-
-// =============================================================================
 // HTTP STATUS CODES
 // =============================================================================
 
@@ -406,7 +339,6 @@ export const HttpStatus = {
  */
 export const config = {
   auth: AuthConfig,
-  cache: CacheConfig,
   cors: CorsConfig,
   fileLock: FileLockConfig,
   httpStatus: HttpStatus,
@@ -416,7 +348,6 @@ export const config = {
   request: RequestConfig,
   retry: RetryConfig,
   server: ServerConfig,
-  storage: StorageConfig,
 } as const;
 
 export default config;

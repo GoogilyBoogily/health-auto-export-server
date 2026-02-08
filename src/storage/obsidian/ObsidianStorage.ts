@@ -34,6 +34,54 @@ export class ObsidianStorage {
   }
 
   /**
+   * Read health frontmatter for the given date keys.
+   * Returns a map of dateKey → HealthFrontmatter for dates that have existing files.
+   */
+  async readHealthFrontmatter(dateKeys: string[]): Promise<Map<string, HealthFrontmatter>> {
+    const result = new Map<string, HealthFrontmatter>();
+
+    const entries = await Promise.all(
+      dateKeys.map(async (dateKey) => {
+        const filePath = getTrackingFilePath(this.vaultPath, 'health', dateKey);
+        const existing = await readMarkdownFile(filePath);
+        return { dateKey, frontmatter: existing?.frontmatter };
+      }),
+    );
+
+    for (const { dateKey, frontmatter } of entries) {
+      if (frontmatter && 'type' in frontmatter && frontmatter.type === 'health') {
+        result.set(dateKey, frontmatter);
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Read workout frontmatter for the given date keys.
+   * Returns a map of dateKey → WorkoutFrontmatter for dates that have existing files.
+   */
+  async readWorkoutFrontmatter(dateKeys: string[]): Promise<Map<string, WorkoutFrontmatter>> {
+    const result = new Map<string, WorkoutFrontmatter>();
+
+    const entries = await Promise.all(
+      dateKeys.map(async (dateKey) => {
+        const filePath = getTrackingFilePath(this.vaultPath, 'workout', dateKey);
+        const existing = await readMarkdownFile(filePath);
+        return { dateKey, frontmatter: existing?.frontmatter };
+      }),
+    );
+
+    for (const { dateKey, frontmatter } of entries) {
+      if (frontmatter && 'type' in frontmatter && frontmatter.type === 'workout') {
+        result.set(dateKey, frontmatter);
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * Initialize storage - verify vault path exists and is accessible.
    */
   async init(): Promise<void> {

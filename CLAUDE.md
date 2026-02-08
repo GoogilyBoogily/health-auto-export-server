@@ -48,40 +48,32 @@ Each controller (`metrics.ts`, `workouts.ts`) follows the same pattern:
 ```
 Raw API data
   → Mappers (transform + validation tracking)
-  → Deduplication (read cache → hash compare → filter)
-  → Write Obsidian FIRST (authoritative store, with retry)
-  → On Obsidian success: update cache
-  → Schedule debounced cache cleanup
+  → Deduplication (read Obsidian frontmatter → compare timestamps/IDs → filter)
+  → Write to Obsidian (with retry)
 ```
 
-**Critical invariant:** Obsidian is the authoritative store. Cache only updates after Obsidian succeeds. If Obsidian fails after all retries, the cache is NOT updated and the request returns an error. This prevents cache/Obsidian drift.
+**Single source of truth:** Obsidian is the only data store. Deduplication reads existing frontmatter to compare against incoming data (metrics by timestamp, workouts by `appleWorkoutId`). The Obsidian formatters also upsert by these same keys, so dedup is an optimization — even if a duplicate passes through, the write is idempotent.
 
 ### Key Directories
 
 - `src/controllers/` - `ingester.ts` orchestrates; `metrics.ts` and `workouts.ts` run the pipeline above
 - `src/mappers/` - Transform raw API data into typed objects; `metricMapper.ts` tracks validation stats per-request via `MappingContext`
-- `src/storage/` - Dual storage with file locking and atomic writes
+- `src/storage/` - Obsidian storage with file locking and atomic writes
 - `src/storage/obsidian/` - Obsidian vault integration (Markdown with YAML frontmatter)
 - `src/storage/obsidian/formatters/` - Separate formatters for health, sleep, and workout frontmatter
 - `src/types/` - Centralized TypeScript types with barrel export (`index.ts`)
 - `src/validation/` - Zod schemas for request validation
 - `src/middleware/` - Auth, rate limiting, request timeout, request logging
 
-### Dual Storage System
+### Storage System
 
-**1. CacheStorage (JSON)** - Deduplication cache with automatic expiry
-```
-data/metrics/YYYY/MM/YYYY-MM-DD.json
-data/workouts/YYYY/MM/YYYY-MM-DD.json
-```
-
-**2. ObsidianStorage (Markdown)** - Human-readable tracking files in Obsidian vault
+**ObsidianStorage (Markdown)** - Single source of truth for all health data
 
 Default paths use Johnny Decimal numbering (configurable in `config.ts`):
 
-- Health metrics → `79 Health Tracking/YYYY-MM-DD.md`
-- Sleep data → `78 Sleep Tracking/YYYY-MM-DD.md`
-- Workouts → `77 Workout Tracking/YYYY-MM-DD.md`
+- Health metrics → `79 Health Tracking/YYYY/MM/YYYY-MM-DD.md`
+- Sleep data → `78 Sleep Tracking/YYYY/MM/YYYY-MM-DD.md`
+- Workouts → `77 Workout Tracking/YYYY/MM/YYYY-MM-DD.md`
 
 Each Markdown file has YAML frontmatter for Obsidian Dataview queries.
 
@@ -89,9 +81,8 @@ Each Markdown file has YAML frontmatter for Obsidian Dataview queries.
 
 - **Atomic writes:** Temp file + rename prevents corruption
 - **File locking:** `filePath.lock` with 30s stale detection (`fileHelpers.ts:withLock`)
-- **Deduplication:** Metrics by `date|source` hash, workouts by `workoutId`
+- **Deduplication:** Metrics by timestamp per metric type, workouts by `appleWorkoutId` — reads existing Obsidian frontmatter
 - **Lazy initialization:** ObsidianStorage initialized after env validation in `app.ts`
-- **Cleanup:** Cache files older than `CACHE_RETENTION_DAYS` are deleted, debounced per request
 
 ### Logger
 
@@ -126,13 +117,9 @@ PGID                 # Host group ID for volume permissions (default: 1000)
 
 # Optional - Server
 NODE_ENV             # development|production (default: development)
-DATA_DIR             # Data directory (default: ./data)
 PORT                 # Server port (default: 3001)
 LOG_LEVEL            # debug|info|warn|error (default: debug)
 DEBUG_LOGGING        # true|false - Enable verbose debug logging (default: false)
-
-# Optional - Cache
-CACHE_RETENTION_DAYS # Days to keep cache data (default: 7, 0 disables cleanup)
 
 # Optional - Metrics
 SLEEP_SESSION_GAP_MINUTES  # Gap threshold for sleep sessions in minutes (default: 30)

@@ -5,6 +5,7 @@
  */
 
 import { logger } from '../../../utils/logger';
+import { snakeToCamelCase } from '../../../utils/stringUtilities';
 import { formatIsoTimestamp } from '../utils/dateUtilities';
 import { isSleepMetric } from './sleep';
 
@@ -149,8 +150,4 @@ function metricToReading(metric: Metric): Reading {
   };
   if (base.source) reading.source = base.source;
   return reading;
-}
-
-function snakeToCamelCase(s: string): string {
-  return s.replaceAll(/_([a-z])/g, (_, c: string) => c.toUpperCase());
 }

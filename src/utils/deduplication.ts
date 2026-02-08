@@ -1,114 +1,14 @@
+import { formatIsoTimestamp } from '../storage/obsidian/utils/dateUtilities';
+import { snakeToCamelCase } from './stringUtilities';
+
 import type {
+  BaseMetric,
+  HealthFrontmatter,
   Metric,
   MetricCommon,
-  MetricDailyFile,
-  WorkoutDailyFile,
   WorkoutData,
+  WorkoutFrontmatter,
 } from '../types';
-
-/**
- * Build a hash set from cached metrics for O(1) duplicate lookup.
- */
-export function buildMetricHashSet(cachedData: Map<string, MetricDailyFile>): Set<string> {
-  const hashSet = new Set<string>();
-
-  for (const dailyFile of cachedData.values()) {
-    for (const metrics of Object.values(dailyFile.metrics)) {
-      for (const metric of metrics) {
-        hashSet.add(createMetricHash(metric));
-      }
-    }
-  }
-
-  return hashSet;
-}
-
-/**
- * Build a map of identity keys to array indices for O(1) upsert lookup.
- * Used by CacheStorage to find existing metrics for update.
- */
-export function buildMetricIdentityMap(metrics: Metric[], metricType: string): Map<string, number> {
-  const identityMap = new Map<string, number>();
-  for (const [index, metric] of metrics.entries()) {
-    const key = createMetricIdentityKey(metric, metricType);
-    identityMap.set(key, index);
-  }
-  return identityMap;
-}
-
-/**
- * Build a set of existing workout IDs from cache.
- */
-export function buildWorkoutIdSet(cachedData: Map<string, WorkoutDailyFile>): Set<string> {
-  const idSet = new Set<string>();
-
-  for (const dailyFile of cachedData.values()) {
-    for (const workoutId of Object.keys(dailyFile.workouts)) {
-      idSet.add(workoutId);
-    }
-  }
-
-  return idSet;
-}
-
-/**
- * Create a deterministic hash string for a metric.
- * Two metrics with identical data will produce the same hash.
- *
- * Used by both:
- * - Upstream deduplication (filterDuplicateMetrics) to filter incoming requests
- * - CacheStorage to detect duplicates when writing to cache files
- *
- * Uses a fast path for common BaseMetric types (90%+ of traffic)
- * to avoid expensive recursive normalization.
- */
-export function createMetricHash(metric: Metric): string {
-  // Fast path for BaseMetric (most common type)
-  // These have: date, qty, units, source, and optionally metadata
-  const baseMetric = metric as MetricCommon & { qty?: number; units?: string };
-  if (
-    baseMetric.qty !== undefined &&
-    baseMetric.units !== undefined &&
-    !('systolic' in metric) &&
-    !('Avg' in metric) &&
-    !('asleep' in metric)
-  ) {
-    // Construct a deterministic hash string directly
-    const date = new Date(baseMetric.date).toISOString();
-    const source = baseMetric.source ?? '';
-    const metadata = baseMetric.metadata ? JSON.stringify(baseMetric.metadata) : '';
-    return `${date}|${source}|${String(baseMetric.qty)}|${baseMetric.units}|${metadata}`;
-  }
-
-  // Slow path for complex metrics (blood pressure, heart rate, sleep)
-  const normalized = normalizeValue(metric);
-  return JSON.stringify(normalized);
-}
-
-/**
- * Create a metric identity key for upsert operations.
- * Identity is based on date + source + metricType, WITHOUT the value.
- * This allows the same metric to be updated when Apple Health sends revised values.
- *
- * Identity rules:
- * - BaseMetric: date|source|metricType
- * - Sleep: sleepStart|source|sleep (unique per sleep session)
- * - HeartRate/BloodPressure: date|source|metricType
- */
-export function createMetricIdentityKey(metric: Metric, metricType: string): string {
-  const common = metric as MetricCommon;
-  const source = common.source ?? '';
-
-  // Sleep metrics use sleepStart as the unique identifier for the session
-  if ('sleepStart' in metric) {
-    const sleepStart = new Date(metric.sleepStart).toISOString();
-    return `${sleepStart}|${source}|sleep`;
-  }
-
-  // All other metrics use date
-  const date = new Date(common.date).toISOString();
-  return `${date}|${source}|${metricType}`;
-}
 
 /**
  * Extract unique date keys from metrics using sourceDate.
@@ -141,39 +41,46 @@ export function extractDatesFromWorkouts(workouts: WorkoutData[]): string[] {
 }
 
 /**
- * Filter metrics to remove exact duplicates that exist in cache.
- * Returns only genuinely new metrics.
+ * Filter metrics to remove duplicates that already exist in Obsidian frontmatter.
+ * Compares by timestamp per metric type — if a reading with the same time exists, it's a duplicate.
  *
- * Uses a separate Set for within-batch deduplication to avoid
- * memory leaks from modifying the cache hash set.
+ * This is an optimization, not a correctness requirement. The Obsidian formatter
+ * already upserts by timestamp, so passing a duplicate through would simply
+ * result in an identical file write.
  */
 export function filterDuplicateMetrics(
   incoming: Record<string, Metric[]>,
-  cachedData: Map<string, MetricDailyFile>,
+  existingFrontmatter: Map<string, HealthFrontmatter>,
 ): {
   duplicateCount: number;
   newCount: number;
   newMetrics: Record<string, Metric[]>;
 } {
-  const existingHashes = buildMetricHashSet(cachedData);
-  // Separate set for within-batch deduplication to avoid memory leak
-  const batchHashes = new Set<string>();
+  const existingTimestamps = buildExistingTimestamps(existingFrontmatter);
+  const batchTimestamps = new Map<string, Set<string>>();
   const newMetrics: Record<string, Metric[]> = {};
   let duplicateCount = 0;
   let newCount = 0;
 
   for (const [metricType, metrics] of Object.entries(incoming)) {
+    const camelKey = snakeToCamelCase(metricType);
+    const existingTimes = existingTimestamps.get(camelKey);
+    let batchTimes = batchTimestamps.get(camelKey);
+    if (!batchTimes) {
+      batchTimes = new Set<string>();
+      batchTimestamps.set(camelKey, batchTimes);
+    }
+
     const filtered: Metric[] = [];
 
     for (const metric of metrics) {
-      const hash = createMetricHash(metric);
-      if (existingHashes.has(hash) || batchHashes.has(hash)) {
+      const time = formatIsoTimestamp((metric as BaseMetric).date) ?? '';
+
+      if ((existingTimes?.has(time) ?? false) || batchTimes.has(time)) {
         duplicateCount++;
       } else {
         filtered.push(metric);
-        // Add to batch set to prevent duplicates within same batch
-        // (don't modify existingHashes - that would cause memory leak)
-        batchHashes.add(hash);
+        batchTimes.add(time);
         newCount++;
       }
     }
@@ -187,22 +94,18 @@ export function filterDuplicateMetrics(
 }
 
 /**
- * Filter workouts to remove those already in cache.
- * Uses workoutId as the unique identifier.
- *
- * Uses a separate Set for within-batch deduplication to avoid
- * memory leaks from modifying the cache ID set.
+ * Filter workouts to remove those already in Obsidian frontmatter.
+ * Compares by appleWorkoutId — if an entry with the same ID exists, it's a duplicate.
  */
 export function filterDuplicateWorkouts(
   incoming: WorkoutData[],
-  cachedData: Map<string, WorkoutDailyFile>,
+  existingFrontmatter: Map<string, WorkoutFrontmatter>,
 ): {
   duplicateCount: number;
   newCount: number;
   newWorkouts: WorkoutData[];
 } {
-  const existingIds = buildWorkoutIdSet(cachedData);
-  // Separate set for within-batch deduplication to avoid memory leak
+  const existingIds = buildExistingWorkoutIds(existingFrontmatter);
   const batchIds = new Set<string>();
   const newWorkouts: WorkoutData[] = [];
   let duplicateCount = 0;
@@ -212,8 +115,6 @@ export function filterDuplicateWorkouts(
       duplicateCount++;
     } else {
       newWorkouts.push(workout);
-      // Add to batch set to prevent duplicates within same batch
-      // (don't modify existingIds - that would cause memory leak)
       batchIds.add(workout.id);
     }
   }
@@ -226,50 +127,56 @@ export function filterDuplicateWorkouts(
 }
 
 /**
- * Normalize a value for deterministic JSON stringification.
- * - Converts Dates to ISO strings
- * - Sorts object keys alphabetically
- * - Handles nested structures recursively
+ * Extract timestamps from an array of readings and add them to the timestamps map.
  */
-function normalizeValue(value: unknown): unknown {
-  if (value === null || value === undefined) {
-    return value;
+function addTimestampsFromReadings(
+  timestampsByType: Map<string, Set<string>>,
+  key: string,
+  readings: unknown[],
+): void {
+  let existing = timestampsByType.get(key);
+  if (!existing) {
+    existing = new Set<string>();
+    timestampsByType.set(key, existing);
   }
-
-  // Handle Date objects
-  if (value instanceof Date) {
-    return value.toISOString();
-  }
-
-  // Handle strings that look like dates
-  if (typeof value === 'string') {
-    // Check if it's an ISO date string and normalize it
-    if (value.includes('T') && value.includes('-')) {
-      const date = new Date(value);
-      if (!Number.isNaN(date.getTime())) {
-        return date.toISOString();
-      }
+  for (const reading of readings) {
+    if (typeof reading === 'object' && reading !== null && 'time' in reading) {
+      existing.add((reading as { time: string }).time);
     }
-    return value;
   }
+}
 
-  // Handle arrays
-  if (Array.isArray(value)) {
-    return value.map((item) => normalizeValue(item));
-  }
+/**
+ * Build a set of existing timestamps per metric type from health frontmatter.
+ */
+function buildExistingTimestamps(
+  existingFrontmatter: Map<string, HealthFrontmatter>,
+): Map<string, Set<string>> {
+  const timestampsByType = new Map<string, Set<string>>();
 
-  // Handle objects (sort keys for deterministic output)
-  if (typeof value === 'object') {
-    const sorted: Record<string, unknown> = {};
-    const keys = Object.keys(value);
-
-    keys.sort((a, b) => a.localeCompare(b));
-    for (const key of keys) {
-      sorted[key] = normalizeValue((value as Record<string, unknown>)[key]);
+  for (const frontmatter of existingFrontmatter.values()) {
+    for (const [key, value] of Object.entries(frontmatter)) {
+      if (key === 'date' || key === 'type' || !Array.isArray(value)) continue;
+      addTimestampsFromReadings(timestampsByType, key, value);
     }
-    return sorted;
   }
 
-  // Primitives (numbers, booleans) pass through unchanged
-  return value;
+  return timestampsByType;
+}
+
+/**
+ * Build a set of existing workout IDs from workout frontmatter.
+ */
+function buildExistingWorkoutIds(
+  existingFrontmatter: Map<string, WorkoutFrontmatter>,
+): Set<string> {
+  const ids = new Set<string>();
+
+  for (const frontmatter of existingFrontmatter.values()) {
+    for (const entry of frontmatter.workoutEntries) {
+      ids.add(entry.appleWorkoutId);
+    }
+  }
+
+  return ids;
 }

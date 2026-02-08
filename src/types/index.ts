@@ -43,14 +43,7 @@ export type {
 } from './obsidian';
 
 // Storage types
-export type {
-  MetricDailyFile,
-  QueryOptions,
-  SaveResult,
-  StoredRoute,
-  StoredWorkout,
-  WorkoutDailyFile,
-} from './storage';
+export type { SaveResult } from './storage';
 
 // Workout types
 export type {

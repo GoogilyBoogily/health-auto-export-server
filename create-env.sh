@@ -2,7 +2,6 @@
 
 # Default values
 ENVIRONMENT="production"
-DATA_DIR="./data"
 
 # Generate random token for authentication
 API_TOKEN=sk-$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 32)
@@ -10,7 +9,6 @@ API_TOKEN=sk-$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 32)
 echo "Creating .env file..."
 cat > .env << EOF
 NODE_ENV=${ENVIRONMENT}
-DATA_DIR=${DATA_DIR}
 API_TOKEN=${API_TOKEN}
 OBSIDIAN_VAULT_PATH=/path/to/your/obsidian/vault
 EOF

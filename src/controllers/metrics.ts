@@ -5,46 +5,12 @@ import {
   logValidationWarning,
   mapMetric,
 } from '../mappers';
-import { cacheStorage, getObsidianStorage } from '../storage';
+import { getObsidianStorage } from '../storage';
 import { extractDatesFromMetrics, filterDuplicateMetrics } from '../utils/deduplication';
 import { Logger } from '../utils/logger';
 import { withRetry } from '../utils/retry';
 
 import type { IngestData, IngestResponse, Metric } from '../types';
-
-// === CLEANUP DEBOUNCING ===
-// Prevents overlapping cleanup runs from concurrent requests
-let cleanupScheduled = false;
-
-/**
- * Schedule cache cleanup with debouncing to prevent overlapping runs.
- */
-function scheduleCleanup(log?: Logger): void {
-  if (cleanupScheduled) {
-    return;
-  }
-
-  cleanupScheduled = true;
-  const timeout = setTimeout(() => {
-    cleanupScheduled = false;
-    cacheStorage
-      .cleanupExpiredCache()
-      .then((result) => {
-        if (result.deletedFiles > 0) {
-          log?.info('Cache cleanup completed', result);
-        }
-        return result;
-      })
-      .catch((error: unknown) => {
-        log?.error('Cache cleanup failed', {
-          error: error instanceof Error ? error.message : 'Unknown',
-        });
-      });
-  }, RetryConfig.cleanupDebounceMs);
-
-  // Don't block process exit
-  timeout.unref();
-}
 
 export const saveMetrics = async (
   ingestData: IngestData,
@@ -109,14 +75,15 @@ export const saveMetrics = async (
     const incomingDates = extractDatesFromMetrics(metricsByType);
     log?.debug('Incoming metric dates', { dates: incomingDates });
 
-    // 2. Read cache for those dates
-    const cachedData = await cacheStorage.getMetricsForDates(incomingDates);
-    log?.debug('Cache data loaded', { cachedDates: cachedData.size });
+    // 2. Read existing Obsidian frontmatter for those dates
+    const obsidianStorage = getObsidianStorage();
+    const existingFrontmatter = await obsidianStorage.readHealthFrontmatter(incomingDates);
+    log?.debug('Existing frontmatter loaded', { datesWithData: existingFrontmatter.size });
 
-    // 3. Filter duplicates via exact-match hash comparison
+    // 3. Filter duplicates by comparing timestamps
     const { duplicateCount, newCount, newMetrics } = filterDuplicateMetrics(
       metricsByType,
-      cachedData,
+      existingFrontmatter,
     );
     log?.debug('Deduplication complete', { duplicateCount, newCount });
 
@@ -142,10 +109,7 @@ export const saveMetrics = async (
       return response;
     }
 
-    // 5. Write to Obsidian FIRST (authoritative store) with retry logic
-    const obsidianStorage = getObsidianStorage();
-    let obsidianSaved: number;
-
+    // 5. Write to Obsidian with retry logic
     // Debug: Log what we're about to write to Obsidian
     log?.debugStorage('Preparing Obsidian write', {
       data: Object.entries(newMetrics).map(([name, metrics]) => ({
@@ -162,16 +126,14 @@ export const saveMetrics = async (
         maxRetries: RetryConfig.maxRetries,
         operationName: 'Obsidian write',
       });
-      obsidianSaved = obsidianResult.saved;
 
       // Debug: Log Obsidian write result
       log?.debugStorage('Obsidian write completed', {
-        metadata: { saved: obsidianSaved, updated: obsidianResult.updated },
+        metadata: { saved: obsidianResult.saved, updated: obsidianResult.updated },
       });
     } catch (error) {
-      // Obsidian failed after all retries - do NOT update cache, return error
       const obsidianError = error instanceof Error ? error.message : 'Unknown Obsidian error';
-      log?.error('Obsidian storage failed after all retries, cache not updated', {
+      log?.error('Obsidian storage failed after all retries', {
         error: obsidianError,
         retries: RetryConfig.maxRetries,
       });
@@ -190,24 +152,17 @@ export const saveMetrics = async (
       };
     }
 
-    // 6. Only on Obsidian success: Save NEW metrics to cache (pre-deduplicated)
-    const cacheResult = await cacheStorage.saveMetrics(newMetrics);
-
-    // 7. Trigger cache cleanup (debounced)
-    scheduleCleanup(log);
-
     const metricTypesCount = Object.keys(newMetrics).length;
 
     response.metrics = {
-      message: `${String(cacheResult.saved)} new metrics saved, ${String(duplicateCount)} duplicates skipped across ${String(metricTypesCount)} metric types`,
+      message: `${String(newCount)} new metrics saved, ${String(duplicateCount)} duplicates skipped across ${String(metricTypesCount)} metric types`,
       success: true,
     };
 
     timer?.end('info', 'Metrics saved', {
       duplicatesSkipped: duplicateCount,
       metricTypes: metricTypesCount,
-      newMetricsSaved: cacheResult.saved,
-      obsidianSaved,
+      newMetricsSaved: newCount,
     });
 
     return response;

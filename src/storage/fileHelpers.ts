@@ -45,90 +45,10 @@ export async function acquireLock(filePath: string): Promise<void> {
 }
 
 /**
- * Write data atomically using temp file + rename pattern.
- * This ensures readers never see partial writes.
- */
-export async function atomicWrite(filePath: string, data: object): Promise<void> {
-  // eslint-disable-next-line sonarjs/pseudo-random -- Not security-critical, just for unique temp file name
-  const temporaryPath = `${filePath}.tmp.${String(Date.now())}.${Math.random().toString(36).slice(2)}`;
-
-  await ensureDirectory(path.dirname(filePath));
-  await fs.writeFile(temporaryPath, JSON.stringify(data, undefined, 2), 'utf8');
-  await fs.rename(temporaryPath, filePath);
-}
-
-/**
  * Ensure a directory exists, creating it recursively if needed.
  */
 export async function ensureDirectory(directoryPath: string): Promise<void> {
   await fs.mkdir(directoryPath, { recursive: true });
-}
-
-/**
- * Extract the date as YYYY-MM-DD string from a date string or Date object.
- *
- * For strings (e.g., "2026-02-02 08:00:00 -0600"), extracts the date portion directly,
- * preserving the user's intended local date without timezone conversion.
- *
- * For Date objects, falls back to server local timezone extraction.
- */
-export function getDateKey(date: Date | string): string {
-  if (typeof date === 'string') {
-    // Extract date portion directly from the string to preserve user's local date
-    // Format: "YYYY-MM-DD HH:MM:SS ±HHMM" or ISO format "YYYY-MM-DDTHH:MM:SS..."
-    const dateMatch = /^(\d{4}-\d{2}-\d{2})/.exec(date);
-    if (dateMatch) {
-      return dateMatch[1];
-    }
-  }
-
-  // Fallback for Date objects or non-standard string formats
-  const d = new Date(date);
-  const year = String(d.getFullYear());
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-/**
- * Build file path in YYYY/MM/YYYY-MM-DD.json format.
- * Uses getDateKey internally to ensure consistent date handling across all storage backends.
- */
-export function getFilePath(baseDirectory: string, date: Date | string): string {
-  const dateKey = getDateKey(date);
-  const [year, month] = dateKey.split('-');
-  return path.join(baseDirectory, year, month, `${dateKey}.json`);
-}
-
-/**
- * Read JSON file with fallback to default value if file doesn't exist.
- */
-export async function readJsonFile<T>(filePath: string, defaultValue: T): Promise<T> {
-  try {
-    const content = await fs.readFile(filePath, 'utf8');
-    return JSON.parse(content) as T;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return defaultValue;
-    }
-    throw error;
-  }
-}
-
-/**
- * Read JSON file, returning undefined if file doesn't exist.
- * Useful when you need to distinguish between "file doesn't exist" and "file exists but is empty".
- */
-export async function readJsonFileOptional<T>(filePath: string): Promise<T | undefined> {
-  try {
-    const content = await fs.readFile(filePath, 'utf8');
-    return JSON.parse(content) as T;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return undefined;
-    }
-    throw error;
-  }
 }
 
 /**

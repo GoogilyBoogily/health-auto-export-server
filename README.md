@@ -6,26 +6,21 @@
 
 ## Overview
 
-A self-hosted server for ingesting Apple Health data exported via the [Health Auto Export](https://www.healthexportapp.com/) iOS app. Data is stored in two complementary formats:
+A self-hosted server for ingesting Apple Health data exported via the [Health Auto Export](https://www.healthexportapp.com/) iOS app. Data is stored as Obsidian Markdown files with YAML frontmatter, queryable via [Dataview](https://blacksmithgu.github.io/obsidian-dataview/).
 
-- **Obsidian Markdown** — Human-readable files with YAML frontmatter, queryable via [Dataview](https://blacksmithgu.github.io/obsidian-dataview/)
-- **JSON cache** — Date-organized deduplication cache for fast lookups
-
-Obsidian is the authoritative store. The JSON cache only updates after Obsidian writes succeed, preventing drift between the two.
-
-**Key Philosophy:** Write once, own forever.
+**Key Philosophy:** Write once, own forever. Obsidian is the single source of truth.
 
 ---
 
 ## Features
 
 - **Obsidian Vault Integration** — YAML frontmatter files for health, sleep, and workout tracking
-- **Dual Storage System** — Obsidian Markdown (authoritative) + JSON cache (deduplication)
+- **Single Source of Truth** — Obsidian vault is the only data store
 - **Write-Only API** — Single-purpose ingestion endpoint
 - **Bun Runtime** — Fast startup and execution
 - **Atomic Writes** — Temp file + rename prevents data corruption
 - **File Locking** — Concurrent write protection with stale lock detection
-- **Deduplication** — Metrics by `date|source` hash, workouts by `workoutId`
+- **Deduplication** — Metrics by timestamp, workouts by `appleWorkoutId`
 - **Retry with Exponential Backoff** — Automatic retries for Obsidian storage operations
 - **Rate Limiting** — 100 requests per minute per IP
 - **Request Timeout** — 2-minute request processing limit
@@ -155,16 +150,9 @@ Set these to match the owner of your Obsidian vault directory (`id -u` and `id -
 |----------|---------|-------------|
 | `NODE_ENV` | `development` | Environment mode (`development` or `production`) |
 | `PORT` | `3001` | Server port |
-| `DATA_DIR` | `./data` | Directory for JSON cache files |
 | `LOG_LEVEL` | `debug` | Log level (`debug` / `info` / `warn` / `error`) |
 | `DEBUG_LOGGING` | `false` | Enable verbose debug logging |
 | `CORS_ORIGINS` | `*` | Comma-separated allowed CORS origins |
-
-#### Cache
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CACHE_RETENTION_DAYS` | `7` | Days to retain cache data (`0` disables cleanup) |
 
 #### Metrics
 
@@ -259,22 +247,7 @@ Returns `OK` with status 200 if the server is running. No authentication require
 
 ## Data Storage Structure
 
-### JSON Cache (Deduplication)
-
-```
-data/
-├── metrics/
-│   └── 2025/
-│       └── 01/
-│           ├── 2025-01-01.json
-│           └── 2025-01-02.json
-└── workouts/
-    └── 2025/
-        └── 01/
-            └── 2025-01-01.json
-```
-
-### Obsidian Markdown (Authoritative Store)
+### Obsidian Markdown
 
 ```
 Obsidian Vault/
@@ -311,8 +284,9 @@ heart_rate:
 
 ### Deduplication
 
-- **Metrics:** Deduplicated by `date + source`
-- **Workouts:** Deduplicated by `workoutId`
+- **Metrics:** Deduplicated by timestamp per metric type (reads existing frontmatter)
+- **Workouts:** Deduplicated by `appleWorkoutId` (reads existing frontmatter)
+- **Sleep:** Always fully replaced (no dedup needed)
 
 ---
 
@@ -339,8 +313,7 @@ heart_rate:
 │   ├── routes/
 │   │   └── ingester.ts                 # API route definitions
 │   ├── storage/
-│   │   ├── CacheStorage.ts             # JSON cache with expiry
-│   │   ├── fileHelpers.ts              # Atomic writes + file locking
+│   │   ├── fileHelpers.ts              # File locking
 │   │   ├── index.ts                    # Barrel export
 │   │   └── obsidian/
 │   │       ├── ObsidianStorage.ts      # Obsidian vault integration
@@ -362,12 +335,11 @@ heart_rate:
 │   │   ├── storage.ts                  # Storage interface types
 │   │   └── workout.ts                  # Workout data types
 │   ├── utils/
-│   │   ├── deduplication.ts            # Hash-based deduplication
+│   │   ├── deduplication.ts            # Frontmatter-based deduplication
 │   │   ├── logger.ts                   # Dual-mode logger (pretty/JSON)
 │   │   └── retry.ts                    # Exponential backoff retry
 │   └── validation/
 │       └── schemas.ts                  # Zod request schemas
-├── data/                               # JSON cache (gitignored)
 ├── docker-compose.yaml
 ├── Dockerfile
 ├── package.json
@@ -410,7 +382,7 @@ docker compose restart hae-server # Restart
 
 - **Obsidian Health Dashboard** — Query health data with Dataview in your Obsidian vault
 - **Personal Health Archive** — Store years of health data in portable formats
-- **Custom Analytics** — Build dashboards from JSON cache or Obsidian frontmatter
+- **Custom Analytics** — Build dashboards from Obsidian frontmatter
 - **Data Ownership** — Keep health data on your own infrastructure
 - **Backup** — Simple file-based backup with any standard backup solution
 
@@ -436,7 +408,7 @@ This project is a specialized fork of [health-auto-export-server](https://github
 This variant adds:
 
 - **Obsidian vault integration** with YAML frontmatter for Dataview queries
-- **Dual storage system** for reliability and human-readable output
+- **Single source of truth** Obsidian storage with frontmatter-based deduplication
 - **Raw readings storage** instead of computed aggregates
 - **Configurable paths and templates** for vault organization
 
