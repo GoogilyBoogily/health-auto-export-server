@@ -148,6 +148,17 @@ async function writeToObsidian(
     metadata: { saved: obsidianResult.saved, updated: obsidianResult.updated },
   });
 
+  if (!obsidianResult.success) {
+    const errorDetail = obsidianResult.errors?.join('; ') ?? 'Unknown storage error';
+    if (hasNewMetrics) {
+      response.metrics = { error: `Storage error: ${errorDetail}`, success: false };
+    }
+    if (hasNewWorkouts) {
+      response.workouts = { error: `Storage error: ${errorDetail}`, success: false };
+    }
+    return;
+  }
+
   if (hasNewMetrics) {
     const metricTypesCount = Object.keys(metricsPrep.newMetrics).length;
     response.metrics = {

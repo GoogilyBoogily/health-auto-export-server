@@ -269,16 +269,6 @@ export const ObsidianConfig = {
    * @env OBSIDIAN_VAULT_PATH
    */
   vaultPathEnvVar: 'OBSIDIAN_VAULT_PATH',
-
-  /**
-   * Frontmatter parsing patterns.
-   */
-  patterns: {
-    /** YAML frontmatter extraction regex */
-    frontmatterRegex: /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/,
-    /** ISO 8601 timestamp with timezone validation */
-    isoTimestampRegex: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/,
-  },
 } as const;
 
 // =============================================================================

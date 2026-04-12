@@ -42,7 +42,7 @@ export const prepareWorkoutsData = (
       date: w.start,
       duration: w.duration,
       name: w.name,
-      workoutId: (w as { id?: string }).id,
+      workoutId: w.id,
     })),
   });
 

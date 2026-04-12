@@ -5,7 +5,7 @@
 
 import { MetricName } from '../../../types';
 import { logger } from '../../../utils/logger';
-import { roundTo } from '../utils/dateUtilities';
+import { formatIsoTimestamp, roundTo } from '../utils/dateUtilities';
 
 import type {
   DailyFrontmatter,
@@ -127,36 +127,17 @@ function collectAndSortSegments(sleepEntries: SleepMetric[]): SleepSegment[] {
 }
 
 /**
- * Format a Date to ISO 8601 string with local timezone offset.
- * Example output: "2025-12-29T21:39:09-06:00"
- */
-function formatIsoTimestamp(date: Date): string {
-  const year = String(date.getFullYear());
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  const seconds = String(date.getSeconds()).padStart(2, '0');
-
-  // Get timezone offset in hours and minutes
-  const tzOffset = -date.getTimezoneOffset();
-  const tzSign = tzOffset >= 0 ? '+' : '-';
-  const tzHours = String(Math.floor(Math.abs(tzOffset) / 60)).padStart(2, '0');
-  const tzMinutes = String(Math.abs(tzOffset) % 60).padStart(2, '0');
-
-  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}${tzSign}${tzHours}:${tzMinutes}`;
-}
-
-/**
  * Populate frontmatter from individual sleep segments.
+ * Replaces all existing sleep stages — sleep data is always sent as a complete snapshot
+ * per date, so merging would create duplicates rather than preserve data.
  */
 function populateFromSegments(frontmatter: DailyFrontmatter, segments: SleepSegment[]): void {
   frontmatter.sleepStages = segments.map((seg): SleepStageEntry => {
     const entry: SleepStageEntry = {
       duration: roundTo(seg.duration, 2),
-      endTime: formatIsoTimestamp(seg.endTime),
+      endTime: formatIsoTimestamp(seg.endTime) ?? '',
       stage: seg.stage,
-      startTime: formatIsoTimestamp(seg.startTime),
+      startTime: formatIsoTimestamp(seg.startTime) ?? '',
     };
     if (seg.source) entry.source = seg.source;
     return entry;
