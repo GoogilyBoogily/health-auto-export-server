@@ -13,9 +13,6 @@ RUN bun install --frozen-lockfile --production
 COPY src/ ./src/
 COPY tsconfig.json ./
 
-# Create data directory (will be chowned by entrypoint)
-RUN mkdir -p /data
-
 # Copy entrypoint
 COPY docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh

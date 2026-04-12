@@ -28,29 +28,21 @@ export { MetricName } from './metricName';
 // Obsidian types
 export type {
   BloodPressureReading,
+  DailyFrontmatter,
   HealthFrontmatter,
   HeartRateHealthReading,
   HeartRateReading,
   MarkdownFile,
   MetricReading,
-  ObsidianFrontmatter,
   RecoveryReading,
   SleepFrontmatter,
   SleepStageEntry,
-  TrackingType,
   WorkoutEntry,
   WorkoutFrontmatter,
 } from './obsidian';
 
 // Storage types
-export type {
-  MetricDailyFile,
-  QueryOptions,
-  SaveResult,
-  StoredRoute,
-  StoredWorkout,
-  WorkoutDailyFile,
-} from './storage';
+export type { SaveResult } from './storage';
 
 // Workout types
 export type {

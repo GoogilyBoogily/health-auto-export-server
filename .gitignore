@@ -4,4 +4,3 @@ dist
 grafana-data
 
 seed_data/*
-data/

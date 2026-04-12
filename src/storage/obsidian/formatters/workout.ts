@@ -1,35 +1,39 @@
 /**
  * Workout data formatter.
- * Transforms workout data into Obsidian workout tracking frontmatter.
+ * Transforms workout data into workout tracking frontmatter.
  */
 
 import { logger } from '../../../utils/logger';
 import { formatIsoTimestamp, roundTo } from '../utils/dateUtilities';
 
 import type {
+  DailyFrontmatter,
   HeartRateReading,
   RecoveryReading,
   WorkoutData,
   WorkoutEntry,
-  WorkoutFrontmatter,
 } from '../../../types';
 
 /**
- * Create workout frontmatter from workouts for a specific date.
+ * Merge workout data into existing frontmatter for a specific date.
+ * Non-workout keys in the frontmatter are preserved.
  */
 export function createWorkoutFrontmatter(
   dateKey: string,
   workouts: WorkoutData[],
-  existing?: WorkoutFrontmatter,
-): WorkoutFrontmatter {
+  existing?: DailyFrontmatter,
+): DailyFrontmatter {
+  const frontmatter: DailyFrontmatter = existing ?? { date: dateKey };
+
+  frontmatter.date = dateKey;
+
   const newEntries = workouts.map((workout) => workoutToEntry(workout));
 
   // Merge with existing entries (dedup by appleWorkoutId)
   let allEntries: WorkoutEntry[];
-  if (existing?.workoutEntries) {
-    const existingMap = new Map(
-      existing.workoutEntries.map((entry) => [entry.appleWorkoutId, entry]),
-    );
+  const existingEntries = frontmatter.workoutEntries;
+  if (existingEntries && existingEntries.length > 0) {
+    const existingMap = new Map(existingEntries.map((entry) => [entry.appleWorkoutId, entry]));
     for (const entry of newEntries) {
       existingMap.set(entry.appleWorkoutId, entry);
     }
@@ -42,12 +46,14 @@ export function createWorkoutFrontmatter(
 
   logger.debugLog('TRANSFORM', 'Workout frontmatter created with merge', {
     dateKey,
-    existingEntryCount: existing?.workoutEntries.length ?? 0,
+    existingEntryCount: existingEntries?.length ?? 0,
     finalEntryCount: allEntries.length,
     newWorkoutCount: workouts.length,
   });
 
-  return { date: dateKey, type: 'workout', workoutEntries: allEntries };
+  frontmatter.workoutEntries = allEntries;
+
+  return frontmatter;
 }
 
 /**
@@ -74,16 +80,6 @@ export function groupWorkoutsByDate(workouts: WorkoutData[]): Map<string, Workou
   });
 
   return byDate;
-}
-
-/**
- * Merge new workout data with existing frontmatter.
- */
-export function mergeWorkoutFrontmatter(
-  existing: WorkoutFrontmatter,
-  newWorkouts: WorkoutData[],
-): WorkoutFrontmatter {
-  return createWorkoutFrontmatter(existing.date, newWorkouts, existing);
 }
 
 /**

@@ -12,11 +12,24 @@ export interface BloodPressureReading {
   source?: string;
 }
 
+/**
+ * Unified daily tracking frontmatter.
+ * Contains health metrics, sleep stages, workout entries, plus any
+ * external data (moods, habits, weather, etc.) from other apps.
+ */
+export interface DailyFrontmatter {
+  date: string; // YYYY-MM-DD
+  sleepStages?: SleepStageEntry[];
+  workoutEntries?: WorkoutEntry[];
+  [key: string]: unknown; // health metrics + external data preserved during merge
+}
+
 export interface HealthFrontmatter {
   date: string; // YYYY-MM-DD
-  type: 'health';
   [metricName: string]: (BloodPressureReading | HeartRateHealthReading | MetricReading)[] | string;
 }
+
+// ===== WORKOUT TRACKING =====
 
 /**
  * Heart rate reading for health tracking (distinct from workout HeartRateReading).
@@ -28,8 +41,6 @@ export interface HeartRateHealthReading {
   time: string; // ISO timestamp with timezone
   source?: string;
 }
-
-// ===== WORKOUT TRACKING =====
 
 /**
  * Heart rate reading during a workout (per-minute data).
@@ -43,7 +54,7 @@ export interface HeartRateReading {
 
 export interface MarkdownFile {
   body: string;
-  frontmatter: ObsidianFrontmatter;
+  frontmatter: DailyFrontmatter;
 }
 
 export interface MetricReading {
@@ -51,8 +62,6 @@ export interface MetricReading {
   value: number;
   source?: string;
 }
-
-export type ObsidianFrontmatter = HealthFrontmatter | SleepFrontmatter | WorkoutFrontmatter;
 
 /**
  * Heart rate recovery reading after workout ends.
@@ -83,8 +92,6 @@ export interface SleepStageEntry {
 
 // ===== COMMON TYPES =====
 
-export type TrackingType = 'health' | 'sleep' | 'workout';
-
 export interface WorkoutEntry {
   appleWorkoutId: string; // Original workout ID from Apple Health
   duration: number; // minutes
@@ -108,6 +115,5 @@ export interface WorkoutEntry {
 
 export interface WorkoutFrontmatter {
   date: string; // YYYY-MM-DD
-  type: 'workout';
   workoutEntries: WorkoutEntry[];
 }

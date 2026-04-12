@@ -1,6 +1,6 @@
 /**
  * Sleep data formatter.
- * Transforms sleep_analysis metrics into Obsidian sleep tracking frontmatter.
+ * Transforms sleep_analysis metrics into sleep tracking frontmatter.
  */
 
 import { MetricName } from '../../../types';
@@ -8,8 +8,8 @@ import { logger } from '../../../utils/logger';
 import { roundTo } from '../utils/dateUtilities';
 
 import type {
+  DailyFrontmatter,
   Metric,
-  SleepFrontmatter,
   SleepMetric,
   SleepSegment,
   SleepStageEntry,
@@ -25,17 +25,18 @@ export interface SleepDateData {
 type MetricsByType = Record<string, Metric[]>;
 
 /**
- * Create sleep frontmatter from sleep data for a specific date.
- * Combines all sleep sessions into a single output with all segments.
+ * Merge sleep data into existing frontmatter for a specific date.
+ * Combines all sleep sessions into sleepStages.
+ * Non-sleep keys in the frontmatter are preserved.
  */
 export function createSleepFrontmatter(
   dateKey: string,
   sleepData: SleepDateData,
-  _existing?: SleepFrontmatter,
-): SleepFrontmatter {
-  const frontmatter: SleepFrontmatter = {
-    date: dateKey,
-  };
+  existing?: DailyFrontmatter,
+): DailyFrontmatter {
+  const frontmatter: DailyFrontmatter = existing ?? { date: dateKey };
+
+  frontmatter.date = dateKey;
 
   const { sleepMetrics } = sleepData;
 
@@ -97,22 +98,6 @@ export function isSleepMetric(metricType: string): boolean {
 }
 
 /**
- * Merge new sleep data with existing frontmatter.
- * New values completely replace existing ones (sleep data is typically complete).
- */
-export function mergeSleepFrontmatter(
-  existing: SleepFrontmatter,
-  newData: Partial<SleepFrontmatter>,
-): SleepFrontmatter {
-  // For sleep, we typically want to replace entirely with new data
-  // But preserve any user-added fields
-  return {
-    ...existing,
-    ...newData,
-  };
-}
-
-/**
  * Collect segments from all sleep entries and sort by start time.
  */
 function collectAndSortSegments(sleepEntries: SleepMetric[]): SleepSegment[] {
@@ -165,7 +150,7 @@ function formatIsoTimestamp(date: Date): string {
 /**
  * Populate frontmatter from individual sleep segments.
  */
-function populateFromSegments(frontmatter: SleepFrontmatter, segments: SleepSegment[]): void {
+function populateFromSegments(frontmatter: DailyFrontmatter, segments: SleepSegment[]): void {
   frontmatter.sleepStages = segments.map((seg): SleepStageEntry => {
     const entry: SleepStageEntry = {
       duration: roundTo(seg.duration, 2),

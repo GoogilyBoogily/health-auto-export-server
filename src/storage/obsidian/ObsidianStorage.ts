@@ -1,5 +1,6 @@
 /**
  * ObsidianStorage - Writes health data to Obsidian vault as Markdown with YAML frontmatter.
+ * All data types (health, sleep, workouts) merge into a single daily file.
  */
 
 import { promises as fs } from 'node:fs';
@@ -7,24 +8,19 @@ import { promises as fs } from 'node:fs';
 import { logger } from '../../utils/logger';
 import { withLock } from '../fileHelpers';
 import { createHealthFrontmatter, groupHealthMetricsByDate } from './formatters/health';
-import { createSleepFrontmatter, groupSleepMetricsByDate, isSleepMetric } from './formatters/sleep';
+import { createSleepFrontmatter, groupSleepMetricsByDate } from './formatters/sleep';
 import { createWorkoutFrontmatter, groupWorkoutsByDate } from './formatters/workout';
 import {
+  getDailyFilePath,
   getDefaultBody,
-  getTrackingFilePath,
   readMarkdownFile,
   writeMarkdownFile,
 } from './utils/markdownUtilities';
 
-import type {
-  HealthFrontmatter,
-  Metric,
-  SaveResult,
-  SleepFrontmatter,
-  WorkoutData,
-  WorkoutFrontmatter,
-} from '../../types';
+import type { DailyFrontmatter, Metric, SaveResult, WorkoutData } from '../../types';
 import type { SleepDateData } from './formatters/sleep';
+
+type MetricsByType = Record<string, Metric[]>;
 
 export class ObsidianStorage {
   private vaultPath: string;
@@ -59,267 +55,134 @@ export class ObsidianStorage {
   }
 
   /**
-   * Save metrics to Obsidian vault.
-   * Processes health metrics and sleep data, writing to appropriate tracking files.
+   * Save all data types to unified daily files.
+   * Groups data by date and writes each date's data in a single atomic operation.
+   * Preserves non-health frontmatter (moods, habits, weather, etc.) from other apps.
    */
-  async saveMetrics(metricsByType: Record<string, Metric[]>): Promise<SaveResult> {
-    const results: SaveResult[] = [];
+  async saveDailyData(parameters: {
+    metrics?: MetricsByType;
+    workouts?: WorkoutData[];
+  }): Promise<SaveResult> {
+    const { metrics, workouts } = parameters;
 
-    // Process health metrics
-    const healthResult = await this.saveHealthMetrics(metricsByType);
-    results.push(healthResult);
+    // Group each data type by date
+    // groupHealthMetricsByDate filters OUT sleep; groupSleepMetricsByDate filters FOR sleep
+    const healthByDate = metrics
+      ? groupHealthMetricsByDate(metrics)
+      : new Map<string, MetricsByType>();
+    const sleepByDate = metrics
+      ? groupSleepMetricsByDate(metrics)
+      : new Map<string, SleepDateData>();
+    const workoutsByDate = workouts
+      ? groupWorkoutsByDate(workouts)
+      : new Map<string, WorkoutData[]>();
 
-    // Process sleep metrics separately
-    const sleepResult = await this.saveSleepMetrics(metricsByType);
-    results.push(sleepResult);
+    // Collect all unique date keys
+    const allDates = new Set<string>([
+      ...healthByDate.keys(),
+      ...sleepByDate.keys(),
+      ...workoutsByDate.keys(),
+    ]);
 
-    // Aggregate results
-    const totalSaved = results.reduce((sum, r) => sum + r.saved, 0);
-    const totalUpdated = results.reduce((sum, r) => sum + r.updated, 0);
-    const allErrors = results.flatMap((r) => r.errors ?? []);
+    if (allDates.size === 0) {
+      return { saved: 0, success: true, updated: 0 };
+    }
 
-    logger.debug('Obsidian metrics saved', {
+    logger.debug('Saving daily data to Obsidian', {
+      dates: [...allDates],
+      healthDates: healthByDate.size,
+      sleepDates: sleepByDate.size,
+      workoutDates: workoutsByDate.size,
+    });
+
+    let totalSaved = 0;
+    let totalUpdated = 0;
+    const errors: string[] = [];
+
+    for (const dateKey of allDates) {
+      try {
+        const result = await this.saveDailyForDate(
+          dateKey,
+          healthByDate.get(dateKey),
+          sleepByDate.get(dateKey),
+          workoutsByDate.get(dateKey),
+        );
+        if (result.isNew) {
+          totalSaved++;
+        } else {
+          totalUpdated++;
+        }
+      } catch (error) {
+        logger.error('Failed to save daily file', error, { dateKey });
+        errors.push(`${dateKey}: ${(error as Error).message}`);
+      }
+    }
+
+    logger.debug('Obsidian daily data saved', {
+      filesWritten: allDates.size,
       saved: totalSaved,
       updated: totalUpdated,
     });
 
     return {
-      errors: allErrors.length > 0 ? allErrors : undefined,
+      errors: errors.length > 0 ? errors : undefined,
       saved: totalSaved,
-      success: allErrors.length === 0,
+      success: errors.length === 0,
       updated: totalUpdated,
     };
   }
 
   /**
-   * Save workouts to Obsidian vault.
+   * Save all data for a single date into one daily file.
+   * Reads existing file first to preserve non-health data.
    */
-  async saveWorkouts(workouts: WorkoutData[]): Promise<SaveResult> {
-    if (workouts.length === 0) {
-      return { saved: 0, success: true, updated: 0 };
-    }
-
-    logger.debug('Saving workouts to Obsidian', { count: workouts.length });
-
-    const byDate = groupWorkoutsByDate(workouts);
-    let totalSaved = 0;
-    let totalUpdated = 0;
-    const errors: string[] = [];
-
-    for (const [dateKey, dateWorkouts] of byDate) {
-      try {
-        const result = await this.saveWorkoutsForDate(dateKey, dateWorkouts);
-        if (result.isNew) {
-          totalSaved++;
-        } else {
-          totalUpdated++;
-        }
-      } catch (error) {
-        logger.error('Failed to save Obsidian workout file', error, { dateKey });
-        errors.push(`${dateKey}: ${(error as Error).message}`);
-      }
-    }
-
-    logger.debug('Obsidian workouts saved', {
-      filesWritten: byDate.size,
-      saved: totalSaved,
-      updated: totalUpdated,
-    });
-
-    return {
-      errors: errors.length > 0 ? errors : undefined,
-      saved: totalSaved,
-      success: errors.length === 0,
-      updated: totalUpdated,
-    };
-  }
-
-  private async saveHealthForDate(
+  private async saveDailyForDate(
     dateKey: string,
-    metricsByType: Record<string, Metric[]>,
+    healthData?: MetricsByType,
+    sleepData?: SleepDateData,
+    workoutData?: WorkoutData[],
   ): Promise<{ isNew: boolean }> {
-    const filePath = getTrackingFilePath(this.vaultPath, 'health', dateKey);
+    const filePath = getDailyFilePath(this.vaultPath, dateKey);
 
-    // Debug: Log health file write attempt
-    logger.debugStorage('Writing health file', {
-      data: Object.entries(metricsByType).map(([name, metrics]) => ({
-        count: metrics.length,
-        name,
-      })),
-      filePath,
-      fileType: 'health',
-    });
-
-    return withLock(filePath, async () => {
-      const existing = await readMarkdownFile(filePath);
-      const isNew = !existing?.frontmatter;
-
-      const frontmatter = createHealthFrontmatter(
-        dateKey,
-        metricsByType,
-        existing?.frontmatter as HealthFrontmatter | undefined,
-      );
-      const body = existing?.body ?? getDefaultBody('health', dateKey);
-
-      // Debug: Log frontmatter being written
-      logger.debugLog('STORAGE', `Health frontmatter for ${dateKey}`, {
-        frontmatterKeys: Object.keys(frontmatter),
-        isNew,
-      });
-
-      await writeMarkdownFile(filePath, frontmatter, body);
-
-      return { isNew };
-    });
-  }
-
-  private async saveHealthMetrics(metricsByType: Record<string, Metric[]>): Promise<SaveResult> {
-    const byDate = groupHealthMetricsByDate(metricsByType);
-
-    if (byDate.size === 0) {
-      return { saved: 0, success: true, updated: 0 };
-    }
-
-    logger.debug('Saving health metrics to Obsidian', { dates: byDate.size });
-
-    let totalSaved = 0;
-    let totalUpdated = 0;
-    const errors: string[] = [];
-
-    for (const [dateKey, dateMetrics] of byDate) {
-      try {
-        const result = await this.saveHealthForDate(dateKey, dateMetrics);
-        if (result.isNew) {
-          totalSaved++;
-        } else {
-          totalUpdated++;
-        }
-      } catch (error) {
-        logger.error('Failed to save Obsidian health file', error, { dateKey });
-        errors.push(`${dateKey}: ${(error as Error).message}`);
-      }
-    }
-
-    return {
-      errors: errors.length > 0 ? errors : undefined,
-      saved: totalSaved,
-      success: errors.length === 0,
-      updated: totalUpdated,
-    };
-  }
-
-  private async saveSleepForDate(
-    dateKey: string,
-    sleepData: SleepDateData,
-  ): Promise<{ isNew: boolean }> {
-    const filePath = getTrackingFilePath(this.vaultPath, 'sleep', dateKey);
-
-    // Debug: Log sleep file write attempt
-    logger.debugStorage('Writing sleep file', {
+    logger.debugStorage('Writing daily file', {
       data: {
-        entriesCount: sleepData.sleepMetrics.length,
+        hasHealth: healthData !== undefined,
+        hasSleep: sleepData !== undefined,
+        hasWorkouts: workoutData !== undefined,
       },
       filePath,
-      fileType: 'sleep',
+      fileType: 'daily',
     });
 
     return withLock(filePath, async () => {
       const existing = await readMarkdownFile(filePath);
       const isNew = !existing?.frontmatter;
 
-      const frontmatter = createSleepFrontmatter(
-        dateKey,
-        sleepData,
-        existing?.frontmatter as SleepFrontmatter | undefined,
-      );
-      const body = existing?.body ?? getDefaultBody('sleep', dateKey);
+      // Start with existing frontmatter to preserve non-health data (moods, weather, etc.)
+      let frontmatter: DailyFrontmatter = existing?.frontmatter ?? { date: dateKey };
+      frontmatter.date = dateKey;
 
-      // Debug: Log sleep frontmatter being written
-      logger.debugLog('STORAGE', `Sleep frontmatter for ${dateKey}`, {
-        frontmatter,
-        isNew,
-      });
-
-      await writeMarkdownFile(filePath, frontmatter, body);
-
-      return { isNew };
-    });
-  }
-
-  private async saveSleepMetrics(metricsByType: Record<string, Metric[]>): Promise<SaveResult> {
-    // Filter for sleep metrics only
-    const hasSleepData = Object.keys(metricsByType).some((key) => isSleepMetric(key));
-    if (!hasSleepData) {
-      return { saved: 0, success: true, updated: 0 };
-    }
-
-    const byDate = groupSleepMetricsByDate(metricsByType);
-
-    if (byDate.size === 0) {
-      return { saved: 0, success: true, updated: 0 };
-    }
-
-    logger.debug('Saving sleep metrics to Obsidian', { dates: byDate.size });
-
-    let totalSaved = 0;
-    let totalUpdated = 0;
-    const errors: string[] = [];
-
-    for (const [dateKey, sleepData] of byDate) {
-      try {
-        const result = await this.saveSleepForDate(dateKey, sleepData);
-        if (result.isNew) {
-          totalSaved++;
-        } else {
-          totalUpdated++;
-        }
-      } catch (error) {
-        logger.error('Failed to save Obsidian sleep file', error, { dateKey });
-        errors.push(`${dateKey}: ${(error as Error).message}`);
+      // Merge health metrics
+      if (healthData) {
+        frontmatter = createHealthFrontmatter(dateKey, healthData, frontmatter);
       }
-    }
 
-    return {
-      errors: errors.length > 0 ? errors : undefined,
-      saved: totalSaved,
-      success: errors.length === 0,
-      updated: totalUpdated,
-    };
-  }
+      // Merge sleep stages
+      if (sleepData) {
+        frontmatter = createSleepFrontmatter(dateKey, sleepData, frontmatter);
+      }
 
-  private async saveWorkoutsForDate(
-    dateKey: string,
-    workouts: WorkoutData[],
-  ): Promise<{ isNew: boolean }> {
-    const filePath = getTrackingFilePath(this.vaultPath, 'workout', dateKey);
+      // Merge workout entries
+      if (workoutData) {
+        frontmatter = createWorkoutFrontmatter(dateKey, workoutData, frontmatter);
+      }
 
-    // Debug: Log workout file write attempt
-    logger.debugStorage('Writing workout file', {
-      data: workouts.map((w) => ({
-        duration: w.duration,
-        name: w.name,
-        start: w.start,
-      })),
-      filePath,
-      fileType: 'workout',
-    });
+      // Preserve existing body or generate default
+      const body = existing?.body ?? getDefaultBody(dateKey);
 
-    return withLock(filePath, async () => {
-      const existing = await readMarkdownFile(filePath);
-      const isNew = !existing?.frontmatter;
-
-      const frontmatter = createWorkoutFrontmatter(
-        dateKey,
-        workouts,
-        existing?.frontmatter as WorkoutFrontmatter | undefined,
-      );
-      const body = existing?.body ?? getDefaultBody('workout', dateKey);
-
-      // Debug: Log workout frontmatter being written
-      logger.debugLog('STORAGE', `Workout frontmatter for ${dateKey}`, {
-        frontmatter,
+      logger.debugLog('STORAGE', `Daily frontmatter for ${dateKey}`, {
+        frontmatterKeys: Object.keys(frontmatter),
         isNew,
-        workoutCount: workouts.length,
       });
 
       await writeMarkdownFile(filePath, frontmatter, body);

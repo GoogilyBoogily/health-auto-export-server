@@ -3,13 +3,12 @@
  */
 
 export type {
+  DailyFrontmatter,
   HealthFrontmatter,
   MarkdownFile,
-  ObsidianFrontmatter,
   SleepFrontmatter,
-  TrackingType,
   WorkoutEntry,
   WorkoutFrontmatter,
 } from '../../types';
-export { TRACKING_BODY_TEMPLATES, TRACKING_PATHS } from './constants';
+export { DAILY_BODY_TEMPLATE, DAILY_TRACKING_PATH } from './constants';
 export { ObsidianStorage } from './ObsidianStorage';

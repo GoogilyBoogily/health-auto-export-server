@@ -1,15 +1,172 @@
 import { Request, Response } from 'express';
 
+import { RetryConfig } from '../config';
+import { getObsidianStorage } from '../storage';
+import { withRetry } from '../utils/retry';
 import { IngestDataSchema } from '../validation/schemas';
-import { saveMetrics } from './metrics';
-import { saveWorkouts } from './workouts';
+import { prepareMetrics } from './metrics';
+import { prepareWorkoutsData } from './workouts';
 
 import type { IngestData, IngestResponse } from '../types';
+import type { Logger } from '../utils/logger';
+import type { MetricsPrepResult } from './metrics';
+import type { WorkoutsPrepResult } from './workouts';
+
+interface PrepResults {
+  response: IngestResponse;
+  metricsPrep?: MetricsPrepResult;
+  workoutsPrep?: WorkoutsPrepResult;
+}
+
+/**
+ * Determine HTTP status code from response.
+ */
+function getResponseStatus(response: IngestResponse): number {
+  const values = [response.metrics, response.workouts].filter(
+    (r): r is NonNullable<typeof r> => r !== undefined,
+  );
+  const allFailed = values.every((r) => !r.success);
+  if (allFailed) return 500;
+  const hasErrors = values.some((r) => !r.success);
+  return hasErrors ? 207 : 200;
+}
+
+/**
+ * Core ingestion logic — prepare data, write to Obsidian, and return response.
+ */
+async function processIngestion(
+  data: IngestData,
+  log: Logger,
+): Promise<{ response: IngestResponse; status: number }> {
+  // PHASE 1: Data preparation (mapping + validation)
+  const { metricsPrep, response, workoutsPrep } = runDataPreparation(data, log);
+
+  const hasNewMetrics = metricsPrep !== undefined && metricsPrep.newCount > 0;
+  const hasNewWorkouts = workoutsPrep !== undefined && workoutsPrep.newCount > 0;
+
+  if (!hasNewMetrics && !hasNewWorkouts) {
+    return { response, status: getResponseStatus(response) };
+  }
+
+  // PHASE 2: Write to Obsidian
+  const emptyMetrics: MetricsPrepResult = { newCount: 0, newMetrics: {} };
+  const emptyWorkouts: WorkoutsPrepResult = { newCount: 0, newWorkouts: [] };
+  await writeToObsidian(
+    metricsPrep ?? emptyMetrics,
+    workoutsPrep ?? emptyWorkouts,
+    hasNewMetrics,
+    hasNewWorkouts,
+    response,
+    log,
+  );
+
+  return { response, status: getResponseStatus(response) };
+}
+
+/**
+ * Run data preparation (mapping + validation) and populate response for failures/empty cases.
+ */
+function runDataPreparation(data: IngestData, log: Logger): PrepResults {
+  const response: IngestResponse = {};
+
+  let metricsPrep: MetricsPrepResult | undefined;
+  let workoutsPrep: WorkoutsPrepResult | undefined;
+
+  try {
+    metricsPrep = prepareMetrics(data, log);
+  } catch (error) {
+    log.error('Metrics preparation failed', error);
+    response.metrics = {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      success: false,
+    };
+  }
+
+  try {
+    workoutsPrep = prepareWorkoutsData(data, log);
+  } catch (error) {
+    log.error('Workouts preparation failed', error);
+    response.workouts = {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      success: false,
+    };
+  }
+
+  // Fill in status for empty cases
+  if (metricsPrep?.newCount === 0) {
+    response.metrics = { message: 'No new metrics to save', success: true };
+  }
+  if (workoutsPrep?.newCount === 0) {
+    response.workouts = { message: 'No new workouts to save', success: true };
+  }
+  if (metricsPrep === undefined && !response.metrics) {
+    response.metrics = { message: 'No metrics data provided', success: true };
+  }
+  if (workoutsPrep === undefined && !response.workouts) {
+    response.workouts = { message: 'No workout data provided', success: true };
+  }
+
+  return { metricsPrep, response, workoutsPrep };
+}
+
+/**
+ * Write prepared data to Obsidian and populate response messages.
+ */
+async function writeToObsidian(
+  metricsPrep: MetricsPrepResult,
+  workoutsPrep: WorkoutsPrepResult,
+  hasNewMetrics: boolean,
+  hasNewWorkouts: boolean,
+  response: IngestResponse,
+  log: Logger,
+): Promise<void> {
+  const obsidianStorage = getObsidianStorage();
+
+  log.debugStorage('Preparing Obsidian write', {
+    data: {
+      healthMetricTypes: hasNewMetrics ? Object.keys(metricsPrep.newMetrics).length : 0,
+      newWorkoutCount: hasNewWorkouts ? workoutsPrep.newCount : 0,
+    },
+    fileType: 'daily',
+  });
+
+  const obsidianResult = await withRetry(
+    () =>
+      obsidianStorage.saveDailyData({
+        metrics: hasNewMetrics ? metricsPrep.newMetrics : undefined,
+        workouts: hasNewWorkouts ? workoutsPrep.newWorkouts : undefined,
+      }),
+    {
+      baseDelayMs: RetryConfig.baseDelayMs,
+      log,
+      maxRetries: RetryConfig.maxRetries,
+      operationName: 'Obsidian write',
+    },
+  );
+
+  log.debugStorage('Obsidian write completed', {
+    metadata: { saved: obsidianResult.saved, updated: obsidianResult.updated },
+  });
+
+  if (hasNewMetrics) {
+    const metricTypesCount = Object.keys(metricsPrep.newMetrics).length;
+    response.metrics = {
+      message: `${String(metricsPrep.newCount)} metrics saved across ${String(metricTypesCount)} metric types`,
+      success: true,
+    };
+  }
+
+  if (hasNewWorkouts) {
+    response.workouts = {
+      message: `${String(workoutsPrep.newCount)} workouts saved`,
+      success: true,
+    };
+  }
+}
 
 export const ingestData = async (req: Request, res: Response) => {
   const { log } = req;
   const timer = log.startTimer('ingestData');
-  let response: IngestResponse = {};
 
   try {
     // Validate request body with Zod
@@ -26,7 +183,6 @@ export const ingestData = async (req: Request, res: Response) => {
 
     const data = parseResult.data as IngestData;
 
-    // Debug: Log successful validation with data structure summary
     log.debugValidationPassed({
       metricsCount: data.data.metrics?.length ?? 0,
       metricTypes: data.data.metrics?.map((m) => m.name) ?? [],
@@ -41,57 +197,21 @@ export const ingestData = async (req: Request, res: Response) => {
       workoutsCount: data.data.workouts?.length ?? 0,
     });
 
-    // Use Promise.allSettled for fault tolerance - one failure doesn't stop the other
-    const results = await Promise.allSettled([saveMetrics(data, log), saveWorkouts(data, log)]);
+    const { response, status } = await processIngestion(data, log);
 
-    const [metricsResult, workoutsResult] = results;
-    if (metricsResult.status === 'fulfilled') {
-      response = { ...response, ...metricsResult.value };
-    } else {
-      const reason = metricsResult.reason as Error | undefined;
-      log.error('Metrics save failed', reason);
-      response.metrics = {
-        error: reason?.message ?? 'Unknown error',
-        success: false,
-      };
-    }
-    if (workoutsResult.status === 'fulfilled') {
-      response = { ...response, ...workoutsResult.value };
-    } else {
-      const reason = workoutsResult.reason as Error | undefined;
-      log.error('Workouts save failed', reason);
-      response.workouts = {
-        error: reason?.message ?? 'Unknown error',
-        success: false,
-      };
-    }
-
-    const responseValues = [response.metrics, response.workouts].filter(
-      (r): r is NonNullable<typeof r> => r !== undefined,
-    );
-    const hasErrors = responseValues.some((r) => !r.success);
-    const allFailed = responseValues.every((r) => !r.success);
-
-    if (allFailed) {
-      timer.end('error', 'Ingestion completely failed', { response });
-      res.status(500).json(response);
-      return;
-    }
-
-    timer.end(hasErrors ? 'warn' : 'info', 'Ingestion completed', {
-      hasPartialErrors: hasErrors,
+    timer.end(status === 200 ? 'info' : 'warn', 'Ingestion completed', {
+      hasPartialErrors: status === 207,
       metricsResult: response.metrics,
       workoutsResult: response.workouts,
     });
 
-    // Debug: Log final processing results
     log.debugLog('TRANSFORM', 'Ingestion processing complete', {
-      hasErrors,
+      hasErrors: status !== 200,
       metricsResult: response.metrics,
       workoutsResult: response.workouts,
     });
 
-    res.status(hasErrors ? 207 : 200).json(response);
+    res.status(status).json(response);
   } catch (error) {
     timer.end('error', 'Failed to process ingestion request', {
       error: error instanceof Error ? error.message : 'Unknown error',

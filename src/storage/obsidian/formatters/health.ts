@@ -1,6 +1,6 @@
 /**
  * Health metrics formatter.
- * Transforms raw metrics into Obsidian health tracking frontmatter.
+ * Transforms raw metrics into health tracking frontmatter.
  * Stores every metric type as unaggregated timestamped reading lists.
  */
 
@@ -11,7 +11,7 @@ import { isSleepMetric } from './sleep';
 import type {
   BaseMetric,
   BloodPressureReading,
-  HealthFrontmatter,
+  DailyFrontmatter,
   HeartRateHealthReading,
   Metric,
   MetricCommon,
@@ -23,18 +23,16 @@ type MetricsByType = Record<string, Metric[]>;
 type Reading = BloodPressureReading | HeartRateHealthReading | MetricReading;
 
 /**
- * Create health frontmatter from metrics for a specific date.
+ * Merge health metrics into existing frontmatter for a specific date.
  * Each metric type becomes a key with an array of timestamped readings.
+ * Non-health keys in the frontmatter are preserved.
  */
 export function createHealthFrontmatter(
   dateKey: string,
   metricsByType: MetricsByType,
-  existing?: HealthFrontmatter,
-): HealthFrontmatter {
-  const frontmatter: HealthFrontmatter = existing ?? {
-    date: dateKey,
-    type: 'health',
-  };
+  existing?: DailyFrontmatter,
+): DailyFrontmatter {
+  const frontmatter: DailyFrontmatter = existing ?? { date: dateKey };
 
   frontmatter.date = dateKey;
 
@@ -52,7 +50,7 @@ export function createHealthFrontmatter(
   for (const [metricType, metrics] of Object.entries(metricsByType)) {
     const key = snakeToCamelCase(metricType);
     const newReadings = metrics.map((m) => metricToReading(m));
-    const existingReadings = Array.isArray(frontmatter[key]) ? frontmatter[key] : [];
+    const existingReadings = Array.isArray(frontmatter[key]) ? (frontmatter[key] as Reading[]) : [];
 
     // Deduplicate by time — new readings overwrite existing at same timestamp (upsert)
     const readingMap = new Map<string, Reading>();

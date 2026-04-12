@@ -37,61 +37,47 @@ POST /api/data
   → requireWriteAuth (timing-safe token comparison)
   → ingestData controller
     → Zod validation (IngestDataSchema)
-    → Promise.allSettled(saveMetrics, saveWorkouts)  # Fault-tolerant
+    → Phase 1: Promise.allSettled(prepareMetrics, prepareWorkouts)  # Parallel mapping
+    → Phase 2: obsidianStorage.saveDailyData()  # Single unified write per date
     → Response: 200 (success), 207 (partial), 500 (failure)
 ```
 
 ### Data Processing Pipeline
 
-Each controller (`metrics.ts`, `workouts.ts`) follows the same pattern:
+Each preparation step (`metrics.ts`, `workouts.ts`) maps raw API data to internal types:
 
 ```
 Raw API data
   → Mappers (transform + validation tracking)
-  → Deduplication (read cache → hash compare → filter)
-  → Write Obsidian FIRST (authoritative store, with retry)
-  → On Obsidian success: update cache
-  → Schedule debounced cache cleanup
+  → Write to Obsidian (with retry and file locking)
 ```
 
-**Critical invariant:** Obsidian is the authoritative store. Cache only updates after Obsidian succeeds. If Obsidian fails after all retries, the cache is NOT updated and the request returns an error. This prevents cache/Obsidian drift.
+Deduplication is handled by the Obsidian formatters during merge — health metrics deduplicate by timestamp, workouts by `appleWorkoutId`, sleep overwrites entirely.
 
 ### Key Directories
 
-- `src/controllers/` - `ingester.ts` orchestrates; `metrics.ts` and `workouts.ts` run the pipeline above
+- `src/controllers/` - `ingester.ts` orchestrates; `metrics.ts` and `workouts.ts` handle preparation (mapping)
 - `src/mappers/` - Transform raw API data into typed objects; `metricMapper.ts` tracks validation stats per-request via `MappingContext`
-- `src/storage/` - Dual storage with file locking and atomic writes
 - `src/storage/obsidian/` - Obsidian vault integration (Markdown with YAML frontmatter)
 - `src/storage/obsidian/formatters/` - Separate formatters for health, sleep, and workout frontmatter
 - `src/types/` - Centralized TypeScript types with barrel export (`index.ts`)
 - `src/validation/` - Zod schemas for request validation
 - `src/middleware/` - Auth, rate limiting, request timeout, request logging
 
-### Dual Storage System
+### Obsidian Storage
 
-**1. CacheStorage (JSON)** - Deduplication cache with automatic expiry
-```
-data/metrics/YYYY/MM/YYYY-MM-DD.json
-data/workouts/YYYY/MM/YYYY-MM-DD.json
-```
+All data merges into a single daily file using Johnny Decimal numbering (configurable in `config.ts`):
 
-**2. ObsidianStorage (Markdown)** - Human-readable tracking files in Obsidian vault
+- Daily tracking → `72 Daily Tracking/YYYY/MM/YYYY-MM-DD.md`
 
-Default paths use Johnny Decimal numbering (configurable in `config.ts`):
-
-- Health metrics → `79 Health Tracking/YYYY-MM-DD.md`
-- Sleep data → `78 Sleep Tracking/YYYY-MM-DD.md`
-- Workouts → `77 Workout Tracking/YYYY-MM-DD.md`
-
-Each Markdown file has YAML frontmatter for Obsidian Dataview queries.
+Each file has YAML frontmatter with health metrics, sleep stages, and workout entries. The file may also contain non-health data (moods, habits, weather) from other apps — the server preserves these during writes.
 
 ### Storage Internals
 
 - **Atomic writes:** Temp file + rename prevents corruption
 - **File locking:** `filePath.lock` with 30s stale detection (`fileHelpers.ts:withLock`)
-- **Deduplication:** Metrics by `date|source` hash, workouts by `workoutId`
+- **Deduplication:** Health metrics by timestamp upsert, workouts by `appleWorkoutId` upsert
 - **Lazy initialization:** ObsidianStorage initialized after env validation in `app.ts`
-- **Cleanup:** Cache files older than `CACHE_RETENTION_DAYS` are deleted, debounced per request
 
 ### Logger
 
@@ -126,30 +112,22 @@ PGID                 # Host group ID for volume permissions (default: 1000)
 
 # Optional - Server
 NODE_ENV             # development|production (default: development)
-DATA_DIR             # Data directory (default: ./data)
 PORT                 # Server port (default: 3001)
 LOG_LEVEL            # debug|info|warn|error (default: debug)
 DEBUG_LOGGING        # true|false - Enable verbose debug logging (default: false)
-
-# Optional - Cache
-CACHE_RETENTION_DAYS # Days to keep cache data (default: 7, 0 disables cleanup)
 
 # Optional - Metrics
 SLEEP_SESSION_GAP_MINUTES  # Gap threshold for sleep sessions in minutes (default: 30)
 
 # Optional - Obsidian paths (relative to OBSIDIAN_VAULT_PATH)
-OBSIDIAN_HEALTH_PATH   # Health tracking folder (default: 70-79 Journals & Self-Tracking/79 Health Tracking)
-OBSIDIAN_SLEEP_PATH    # Sleep tracking folder (default: 70-79 Journals & Self-Tracking/78 Sleep Tracking)
-OBSIDIAN_WORKOUT_PATH  # Workout tracking folder (default: 70-79 Journals & Self-Tracking/77 Workout Tracking)
+OBSIDIAN_DAILY_PATH    # Daily tracking folder (default: 70-79 Journals & Self-Tracking/72 Daily Tracking)
 
-# Optional - Obsidian body templates (use \n for newlines in env vars)
-OBSIDIAN_HEALTH_TEMPLATE   # Health file body template (default: # {{date}}\n\n## Health Metrics)
-OBSIDIAN_SLEEP_TEMPLATE    # Sleep file body template (default: \n## Sleep Log)
-OBSIDIAN_WORKOUT_TEMPLATE  # Workout file body template (default: \n\n## Workout Log)
+# Optional - Obsidian body template (use \n for newlines in env vars)
+OBSIDIAN_DAILY_TEMPLATE    # Daily file body template (default: ## Habit Log\n\n## Mood Log\n\n## Bullet Journal\n\n## Workout Log\n\n## Sleep Log\n\n# {{date}}\n\n## Health Metrics)
 ```
 
 Run `./create-env.sh` to generate a `.env` with a secure token.
 
 ### Debug Logging
 
-Enable with `DEBUG_LOGGING=true bun dev`. Categories: `AUTH`, `REQUEST`, `RESPONSE`, `RETRY`, `VALIDATION`, `TRANSFORM`, `DEDUP`, `STORAGE`, `DATA_VALIDATION`.
+Enable with `DEBUG_LOGGING=true bun dev`. Categories: `AUTH`, `REQUEST`, `RESPONSE`, `RETRY`, `VALIDATION`, `TRANSFORM`, `STORAGE`, `DATA_VALIDATION`.

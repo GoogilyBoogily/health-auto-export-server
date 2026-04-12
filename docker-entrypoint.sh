@@ -22,9 +22,6 @@ else
   fi
 fi
 
-# Ensure /data is writable (container-only directory)
-chown "$PUID:$PGID" /data 2>/dev/null || true
-
 # Validate /obsidian is writable (don't recursive chown - it's the user's vault)
 if [ -d "/obsidian" ] && ! su-exec "$PUID:$PGID" test -w "/obsidian"; then
   echo "ERROR: /obsidian is not writable by UID=$PUID GID=$PGID"

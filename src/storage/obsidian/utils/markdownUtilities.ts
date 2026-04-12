@@ -8,31 +8,19 @@ import path from 'node:path';
 import { parse as parseYaml, Scalar, stringify as stringifyYaml } from 'yaml';
 
 import { logger } from '../../../utils/logger';
-import { TRACKING_BODY_TEMPLATES, TRACKING_PATHS } from '../constants';
+import { DAILY_BODY_TEMPLATE, DAILY_TRACKING_PATH } from '../constants';
 import { getDateKey } from './dateUtilities';
 
-import type { MarkdownFile, ObsidianFrontmatter, TrackingType } from '../../../types';
+import type { DailyFrontmatter } from '../../../types';
 
 const FRONTMATTER_REGEX = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/;
 
 /**
- * Get the default body template for a tracking type.
- */
-export function getDefaultBody(trackingType: TrackingType, date: Date | string): string {
-  const dateKey = getDateKey(date);
-  return TRACKING_BODY_TEMPLATES[trackingType].replace('{{date}}', dateKey);
-}
-
-/**
- * Get the file path for a tracking file.
+ * Get the file path for a daily tracking file.
  * When date is a YYYY-MM-DD string (dateKey), it's parsed directly to avoid
  * timezone issues with `new Date()` interpreting it as midnight UTC.
  */
-export function getTrackingFilePath(
-  vaultPath: string,
-  trackingType: TrackingType,
-  date: Date | string,
-): string {
+export function getDailyFilePath(vaultPath: string, date: Date | string): string {
   let year: number;
   let month: string;
   let dateKey: string;
@@ -52,7 +40,15 @@ export function getTrackingFilePath(
     dateKey = getDateKey(d);
   }
 
-  return path.join(vaultPath, TRACKING_PATHS[trackingType], String(year), month, `${dateKey}.md`);
+  return path.join(vaultPath, DAILY_TRACKING_PATH, String(year), month, `${dateKey}.md`);
+}
+
+/**
+ * Get the default body template for a daily tracking file.
+ */
+export function getDefaultBody(date: Date | string): string {
+  const dateKey = getDateKey(date);
+  return DAILY_BODY_TEMPLATE.replace('{{date}}', dateKey);
 }
 
 /**
@@ -61,7 +57,7 @@ export function getTrackingFilePath(
  */
 export function parseMarkdown(content: string): {
   body: string;
-  frontmatter: ObsidianFrontmatter | undefined;
+  frontmatter: DailyFrontmatter | undefined;
 } {
   const match = FRONTMATTER_REGEX.exec(content);
   if (!match) {
@@ -69,7 +65,7 @@ export function parseMarkdown(content: string): {
   }
 
   try {
-    const frontmatter = parseYaml(match[1]) as ObsidianFrontmatter;
+    const frontmatter = parseYaml(match[1]) as DailyFrontmatter;
     return { body: match[2], frontmatter };
   } catch (error) {
     logger.warn('Failed to parse YAML frontmatter, treating as plain markdown', { error });
@@ -83,7 +79,7 @@ export function parseMarkdown(content: string): {
  */
 export async function readMarkdownFile(
   filePath: string,
-): Promise<undefined | { body: string; frontmatter: ObsidianFrontmatter | undefined }> {
+): Promise<undefined | { body: string; frontmatter: DailyFrontmatter | undefined }> {
   try {
     const content = await fs.readFile(filePath, 'utf8');
     return parseMarkdown(content);
@@ -96,31 +92,6 @@ export async function readMarkdownFile(
 }
 
 /**
- * Read or create a markdown file.
- * Returns existing file contents or creates new file with default structure.
- */
-export async function readOrCreateMarkdownFile(
-  filePath: string,
-  defaultFrontmatter: ObsidianFrontmatter,
-  trackingType: TrackingType,
-  date: Date | string,
-): Promise<MarkdownFile> {
-  const existing = await readMarkdownFile(filePath);
-
-  if (existing?.frontmatter) {
-    return {
-      body: existing.body,
-      frontmatter: existing.frontmatter,
-    };
-  }
-
-  return {
-    body: getDefaultBody(trackingType, date),
-    frontmatter: defaultFrontmatter,
-  };
-}
-
-/**
  * ISO 8601 timestamp pattern with timezone offset (e.g., 2026-01-10T04:40:59-06:00)
  * The colon in the timezone offset can cause YAML parsing issues if not quoted.
  */
@@ -130,7 +101,7 @@ const ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{
  * Serialize frontmatter and body to markdown string.
  * Ensures the output always ends with a newline.
  */
-export function serializeMarkdown(frontmatter: ObsidianFrontmatter, body: string): string {
+export function serializeMarkdown(frontmatter: DailyFrontmatter, body: string): string {
   // Prepare frontmatter to ensure ISO timestamps are double-quoted
   const preparedFrontmatter = prepareForYaml(frontmatter);
 
@@ -153,7 +124,7 @@ export function serializeMarkdown(frontmatter: ObsidianFrontmatter, body: string
  */
 export async function writeMarkdownFile(
   filePath: string,
-  frontmatter: ObsidianFrontmatter,
+  frontmatter: DailyFrontmatter,
   body: string,
 ): Promise<void> {
   // Ensure directory exists
