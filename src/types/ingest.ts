@@ -18,6 +18,7 @@ export interface IngestResponse {
     success: boolean;
     error?: string;
     message?: string;
+    skippedRecords?: number; // Records dropped during validation (invalid date / missing fields / bad sleep stage)
   };
   workouts?: {
     success: boolean;

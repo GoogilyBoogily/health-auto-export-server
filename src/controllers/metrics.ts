@@ -14,6 +14,7 @@ import type { Logger } from '../utils/logger';
 export interface MetricsPrepResult {
   newCount: number;
   newMetrics: Record<string, Metric[]>;
+  skippedRecords: number;
 }
 
 /**
@@ -73,7 +74,14 @@ export const prepareMetrics = (
   log?.debugLog('TRANSFORM', 'Metrics transformed and grouped', { byType: transformSummary });
 
   const newCount = Object.values(metricsByType).reduce((sum, m) => sum + m.length, 0);
-  timer?.end('info', 'Metrics prepared', { newCount });
+  timer?.end('info', 'Metrics prepared', {
+    newCount,
+    skippedRecords: validationStats.skippedRecords,
+  });
 
-  return { newCount, newMetrics: metricsByType };
+  return {
+    newCount,
+    newMetrics: metricsByType,
+    skippedRecords: validationStats.skippedRecords,
+  };
 };

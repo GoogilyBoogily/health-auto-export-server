@@ -17,9 +17,8 @@ import type {
   Metric,
   MetricCommon,
   MetricReading,
+  MetricsByType,
 } from '../../../types';
-
-type MetricsByType = Record<string, Metric[]>;
 
 type Reading = BloodPressureReading | HeartRateHealthReading | MetricReading;
 
@@ -51,17 +50,23 @@ export function createHealthFrontmatter(
   for (const [metricType, metrics] of Object.entries(metricsByType)) {
     const key = snakeToCamelCase(metricType);
     const newReadings = metrics.map((m) => metricToReading(m));
-    const existingReadings = Array.isArray(frontmatter[key]) ? (frontmatter[key] as Reading[]) : [];
 
-    // Deduplicate by time — new readings overwrite existing at same timestamp (upsert)
+    // Defensive: only keep entries that look like Reading objects (guards against user-edited frontmatter)
+    const rawExisting = Array.isArray(frontmatter[key]) ? (frontmatter[key] as unknown[]) : [];
+    const existingReadings = rawExisting.filter(
+      (r): r is Reading =>
+        typeof r === 'object' && r !== null && typeof (r as Reading).time === 'string',
+    );
+
+    // Composite key (time|source) so same-instant readings from different sources don't collide
     const readingMap = new Map<string, Reading>();
     for (const r of existingReadings) {
-      readingMap.set(r.time, r);
+      readingMap.set(dedupKey(r), r);
     }
     for (const r of newReadings) {
-      readingMap.set(r.time, r);
+      readingMap.set(dedupKey(r), r);
     }
-    frontmatter[key] = [...readingMap.values()];
+    frontmatter[key] = [...readingMap.values()].toSorted((a, b) => a.time.localeCompare(b.time));
   }
 
   const fieldsSet = Object.keys(frontmatter);
@@ -112,10 +117,21 @@ export function groupHealthMetricsByDate(metricsByType: MetricsByType): Map<stri
 }
 
 /**
+ * Composite dedup key: same-instant readings from different sources must coexist.
+ * Empty source slot still distinguishes "no source" from any named source.
+ */
+function dedupKey(r: Reading): string {
+  return `${r.time}|${r.source ?? ''}`;
+}
+
+/**
  * Convert a raw metric to a timestamped reading based on its shape.
+ * Prefers rawDate (preserves embedded TZ offset) over the parsed Date object
+ * so the dedup key stays stable across server timezone changes.
  */
 function metricToReading(metric: Metric): Reading {
-  const time = formatIsoTimestamp((metric as BaseMetric).date) ?? '';
+  const base = metric as BaseMetric;
+  const time = formatIsoTimestamp(base.rawDate ?? base.date) ?? '';
 
   // Heart rate metrics have Avg/Min/Max fields
   if ('Avg' in metric) {
@@ -141,7 +157,6 @@ function metricToReading(metric: Metric): Reading {
   }
 
   // Default: BaseMetric with qty
-  const base = metric as BaseMetric;
   const reading: MetricReading = {
     time,
     value: base.qty,

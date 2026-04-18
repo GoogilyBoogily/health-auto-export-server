@@ -19,6 +19,16 @@ interface PrepResults {
 }
 
 /**
+ * Surface validation-skipped record count to the client so silent drops are visible.
+ * Mutates response in place.
+ */
+function attachSkippedCount(response: IngestResponse, metricsPrep?: MetricsPrepResult): void {
+  if (!metricsPrep || metricsPrep.skippedRecords <= 0) return;
+  response.metrics ??= { success: true };
+  response.metrics.skippedRecords = metricsPrep.skippedRecords;
+}
+
+/**
  * Determine HTTP status code from response.
  */
 function getResponseStatus(response: IngestResponse): number {
@@ -45,11 +55,12 @@ async function processIngestion(
   const hasNewWorkouts = workoutsPrep !== undefined && workoutsPrep.newCount > 0;
 
   if (!hasNewMetrics && !hasNewWorkouts) {
+    attachSkippedCount(response, metricsPrep);
     return { response, status: getResponseStatus(response) };
   }
 
   // PHASE 2: Write to Obsidian
-  const emptyMetrics: MetricsPrepResult = { newCount: 0, newMetrics: {} };
+  const emptyMetrics: MetricsPrepResult = { newCount: 0, newMetrics: {}, skippedRecords: 0 };
   const emptyWorkouts: WorkoutsPrepResult = { newCount: 0, newWorkouts: [] };
   await writeToObsidian(
     metricsPrep ?? emptyMetrics,
@@ -59,6 +70,8 @@ async function processIngestion(
     response,
     log,
   );
+
+  attachSkippedCount(response, metricsPrep);
 
   return { response, status: getResponseStatus(response) };
 }

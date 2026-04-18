@@ -38,6 +38,7 @@ export interface MetricCommon {
   date: Date;
   sourceDate: string; // YYYY-MM-DD extracted from raw date string before timezone conversion
   metadata?: Record<string, string>;
+  rawDate?: string; // Original raw date string from API; preserves embedded TZ offset for stable dedup keys
   source?: string;
 }
 
@@ -73,6 +74,8 @@ export interface SleepSegment {
   endTime: Date;
   stage: SleepStage;
   startTime: Date;
+  rawEndTime?: string; // Original raw endDate string; preserves embedded TZ offset for stable dedup keys
+  rawStartTime?: string; // Original raw startDate string; preserves embedded TZ offset for stable dedup keys
   source?: string;
 }
 

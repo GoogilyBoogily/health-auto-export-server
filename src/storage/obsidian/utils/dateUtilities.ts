@@ -2,47 +2,34 @@
  * Date utilities for Obsidian frontmatter.
  */
 
-/**
- * Format a Date as ISO 8601 timestamp with timezone offset.
- * Output format: "2026-01-26T06:33:44-06:00"
- * Returns undefined for invalid dates.
- */
+// TZ-stable: identical input → identical output regardless of server timezone.
+// Used as a dedup key, so any drift would create silent duplicates.
+const HAE_DATE_REGEX =
+  /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})\s*([+-])(\d{2}):?(\d{2})$/;
+const ISO_OFFSET_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:\d{2}$/;
+const ISO_UTC_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+
 export function formatIsoTimestamp(date: Date | string | undefined): string | undefined {
   if (!date) return undefined;
 
-  const d = new Date(date);
-  if (Number.isNaN(d.getTime())) return undefined;
+  if (typeof date === 'string') {
+    const trimmed = date.trim();
 
-  // Get timezone offset in minutes and convert to hours:minutes format
-  const offsetMinutes = d.getTimezoneOffset();
-  const offsetSign = offsetMinutes <= 0 ? '+' : '-';
-  const offsetHours = String(Math.floor(Math.abs(offsetMinutes) / 60)).padStart(2, '0');
-  const offsetMins = String(Math.abs(offsetMinutes) % 60).padStart(2, '0');
-  const tzOffset = `${offsetSign}${offsetHours}:${offsetMins}`;
+    const hae = HAE_DATE_REGEX.exec(trimmed);
+    if (hae) {
+      const [, y, mo, d, h, mi, s, sign, oh, om] = hae;
+      return `${y}-${mo}-${d}T${h}:${mi}:${s}${sign}${oh}:${om}`;
+    }
 
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  const hours = String(d.getHours()).padStart(2, '0');
-  const minutes = String(d.getMinutes()).padStart(2, '0');
-  const seconds = String(d.getSeconds()).padStart(2, '0');
-
-  return `${String(year)}-${month}-${day}T${hours}:${minutes}:${seconds}${tzOffset}`;
-}
-
-/**
- * Format a Date as HH:MM time string (local time).
- * Returns undefined for invalid dates instead of "NaN:NaN".
- */
-export function formatTime(date: Date | string | undefined): string | undefined {
-  if (!date) return undefined;
+    if (ISO_OFFSET_REGEX.test(trimmed) || ISO_UTC_REGEX.test(trimmed)) {
+      return trimmed;
+    }
+  }
 
   const d = new Date(date);
   if (Number.isNaN(d.getTime())) return undefined;
 
-  const hours = String(d.getHours()).padStart(2, '0');
-  const minutes = String(d.getMinutes()).padStart(2, '0');
-  return `${hours}:${minutes}`;
+  return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 /**

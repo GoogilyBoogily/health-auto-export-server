@@ -4,6 +4,7 @@
  */
 
 import { MetricsConfig } from '../config';
+import { getDateKey } from '../storage/obsidian/utils/dateUtilities';
 import { MetricName } from '../types';
 import { Logger, ValidationStats } from '../utils/logger';
 
@@ -23,8 +24,6 @@ import type {
 
 // Valid sleep stage values from Health Auto Export
 const VALID_SLEEP_STAGES_SET = new Set<string>(MetricsConfig.validSleepStages);
-
-const DATE_PREFIX_REGEX = /^(\d{4}-\d{2}-\d{2})/;
 
 /**
  * Request-scoped context for tracking validation stats.
@@ -87,23 +86,6 @@ export function logValidationWarning(context: MappingContext): void {
 }
 
 /**
- * Extract the local date (YYYY-MM-DD) from a raw date string.
- * Preserves the user's intended date without timezone conversion.
- * Falls back to server-local Date extraction for non-standard formats.
- */
-function extractSourceDate(dateString: Date | string): string {
-  if (typeof dateString === 'string') {
-    const match = DATE_PREFIX_REGEX.exec(dateString);
-    if (match) return match[1];
-  }
-  const d = new Date(dateString);
-  const year = String(d.getFullYear());
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-/**
  * Check if an object has all required fields defined (not undefined or null).
  */
 function hasRequiredFields(object: unknown, fields: string[]): boolean {
@@ -115,55 +97,6 @@ function hasRequiredFields(object: unknown, fields: string[]): boolean {
 }
 
 /**
- * Validate base metric data has required fields and valid date.
- */
-function isValidBaseMetricData(data: unknown, context: MappingContext): data is BaseMetric {
-  if (!hasRequiredFields(data, ['date', 'qty'])) {
-    context.stats.typeMismatches++;
-    context.stats.skippedRecords++;
-    context.logger?.debugTypeMismatch('base_metric', ['date', 'qty'], data);
-    return false;
-  }
-
-  const record = data as { date: unknown };
-  const date = new Date(record.date as Date | string);
-  if (!isValidDate(date)) {
-    context.stats.invalidDates++;
-    context.stats.skippedRecords++;
-    context.logger?.debugInvalidDate(record.date, 'base_metric');
-    return false;
-  }
-
-  return true;
-}
-
-/**
- * Validate blood pressure data has required fields and valid date.
- */
-function isValidBloodPressureData(
-  data: unknown,
-  context: MappingContext,
-): data is BloodPressureMetric {
-  if (!hasRequiredFields(data, ['date', 'systolic', 'diastolic'])) {
-    context.stats.typeMismatches++;
-    context.stats.skippedRecords++;
-    context.logger?.debugTypeMismatch('blood_pressure', ['date', 'systolic', 'diastolic'], data);
-    return false;
-  }
-
-  const record = data as { date: unknown };
-  const date = new Date(record.date as Date | string);
-  if (!isValidDate(date)) {
-    context.stats.invalidDates++;
-    context.stats.skippedRecords++;
-    context.logger?.debugInvalidDate(record.date, 'blood_pressure');
-    return false;
-  }
-
-  return true;
-}
-
-/**
  * Check if a Date object is valid (not NaN).
  */
 function isValidDate(date: Date): boolean {
@@ -171,13 +104,18 @@ function isValidDate(date: Date): boolean {
 }
 
 /**
- * Validate heart rate data has required fields and valid date.
+ * Validate metric data has required fields and a valid date.
  */
-function isValidHeartRateData(data: unknown, context: MappingContext): data is HeartRateMetric {
-  if (!hasRequiredFields(data, ['date', 'Avg', 'Max', 'Min'])) {
+function isValidMetricData(
+  data: unknown,
+  requiredFields: string[],
+  metricType: string,
+  context: MappingContext,
+): boolean {
+  if (!hasRequiredFields(data, requiredFields)) {
     context.stats.typeMismatches++;
     context.stats.skippedRecords++;
-    context.logger?.debugTypeMismatch('heart_rate', ['date', 'Avg', 'Max', 'Min'], data);
+    context.logger?.debugTypeMismatch(metricType, requiredFields, data);
     return false;
   }
 
@@ -186,7 +124,7 @@ function isValidHeartRateData(data: unknown, context: MappingContext): data is H
   if (!isValidDate(date)) {
     context.stats.invalidDates++;
     context.stats.skippedRecords++;
-    context.logger?.debugInvalidDate(record.date, 'heart_rate');
+    context.logger?.debugInvalidDate(record.date, metricType);
     return false;
   }
 
@@ -233,7 +171,7 @@ export const mapMetric = (
       // Wrist temperature needs end date for accurate night attribution
       const wristTemporaryData = metric.data as (BaseMetric & { end?: string })[];
       result = wristTemporaryData
-        .filter((m) => isValidBaseMetricData(m, context))
+        .filter((m) => isValidMetricData(m, ['date', 'qty'], 'base_metric', context))
         .map((measurement): WristTemperatureMetric => {
           context.stats.processedRecords++;
           return {
@@ -241,8 +179,9 @@ export const mapMetric = (
             endDate: measurement.end ? new Date(measurement.end) : new Date(measurement.date),
             metadata: measurement.metadata,
             qty: measurement.qty,
+            rawDate: typeof measurement.date === 'string' ? measurement.date : undefined,
             source: measurement.source,
-            sourceDate: extractSourceDate(measurement.date),
+            sourceDate: getDateKey(measurement.date),
             units: metric.units,
           };
         });
@@ -251,15 +190,18 @@ export const mapMetric = (
     case MetricName.BLOOD_PRESSURE: {
       const rawData = metric.data as unknown[];
       result = rawData
-        .filter((m): m is BloodPressureMetric => isValidBloodPressureData(m, context))
+        .filter((m): m is BloodPressureMetric =>
+          isValidMetricData(m, ['date', 'systolic', 'diastolic'], 'blood_pressure', context),
+        )
         .map((measurement) => {
           context.stats.processedRecords++;
           return {
             date: new Date(measurement.date),
             diastolic: measurement.diastolic,
             metadata: measurement.metadata,
+            rawDate: typeof measurement.date === 'string' ? measurement.date : undefined,
             source: measurement.source,
-            sourceDate: extractSourceDate(measurement.date),
+            sourceDate: getDateKey(measurement.date),
             systolic: measurement.systolic,
             units: metric.units,
           };
@@ -269,7 +211,9 @@ export const mapMetric = (
     case MetricName.HEART_RATE: {
       const rawData = metric.data as unknown[];
       result = rawData
-        .filter((m): m is HeartRateMetric => isValidHeartRateData(m, context))
+        .filter((m): m is HeartRateMetric =>
+          isValidMetricData(m, ['date', 'Avg', 'Max', 'Min'], 'heart_rate', context),
+        )
         .map((measurement) => {
           context.stats.processedRecords++;
           return {
@@ -278,8 +222,9 @@ export const mapMetric = (
             Max: measurement.Max,
             metadata: measurement.metadata,
             Min: measurement.Min,
+            rawDate: typeof measurement.date === 'string' ? measurement.date : undefined,
             source: measurement.source,
-            sourceDate: extractSourceDate(measurement.date),
+            sourceDate: getDateKey(measurement.date),
             units: metric.units,
           };
         });
@@ -310,7 +255,7 @@ export const mapMetric = (
         sleepEnd: new Date(measurement.sleepEnd),
         sleepStart: new Date(measurement.sleepStart),
         source: measurement.source,
-        sourceDate: extractSourceDate(measurement.sleepEnd),
+        sourceDate: getDateKey(measurement.sleepEnd),
         totalSleep: measurement.totalSleep,
         units: metric.units,
       }));
@@ -319,15 +264,18 @@ export const mapMetric = (
     default: {
       const rawData = metric.data as unknown[];
       result = rawData
-        .filter((m): m is BaseMetric => isValidBaseMetricData(m, context))
+        .filter((m): m is BaseMetric =>
+          isValidMetricData(m, ['date', 'qty'], 'base_metric', context),
+        )
         .map((measurement) => {
           context.stats.processedRecords++;
           return {
             date: new Date(measurement.date),
             metadata: measurement.metadata,
             qty: measurement.qty,
+            rawDate: typeof measurement.date === 'string' ? measurement.date : undefined,
             source: measurement.source,
-            sourceDate: extractSourceDate(measurement.date),
+            sourceDate: getDateKey(measurement.date),
             units: metric.units,
           };
         });
@@ -400,6 +348,8 @@ function aggregateSegments(
     const mappedSegments: SleepSegment[] = sleepSegments.map((seg) => ({
       duration: seg.qty,
       endTime: new Date(seg.endDate),
+      rawEndTime: seg.endDate,
+      rawStartTime: seg.startDate,
       source: seg.source,
       stage: toLowercaseStage(seg.value) as SleepStage,
       startTime: new Date(seg.startDate),
@@ -420,7 +370,7 @@ function aggregateSegments(
       sleepEnd,
       sleepStart,
       source: first.source,
-      sourceDate: extractSourceDate(sleepLast.endDate),
+      sourceDate: getDateKey(sleepLast.endDate),
       totalSleep: asleepHours,
       units,
     };

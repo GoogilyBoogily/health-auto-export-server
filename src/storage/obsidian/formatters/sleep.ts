@@ -9,7 +9,7 @@ import { formatIsoTimestamp, roundTo } from '../utils/dateUtilities';
 
 import type {
   DailyFrontmatter,
-  Metric,
+  MetricsByType,
   SleepMetric,
   SleepSegment,
   SleepStageEntry,
@@ -21,8 +21,6 @@ import type {
 export interface SleepDateData {
   sleepMetrics: SleepMetric[];
 }
-
-type MetricsByType = Record<string, Metric[]>;
 
 /**
  * Merge sleep data into existing frontmatter for a specific date.
@@ -126,20 +124,46 @@ function collectAndSortSegments(sleepEntries: SleepMetric[]): SleepSegment[] {
   return allSegments;
 }
 
+function isValidSleepStageEntry(entry: unknown): entry is SleepStageEntry {
+  if (typeof entry !== 'object' || entry === null) return false;
+  const candidate = entry as Partial<SleepStageEntry>;
+  return typeof candidate.startTime === 'string' && typeof candidate.stage === 'string';
+}
+
 /**
  * Populate frontmatter from individual sleep segments.
- * Replaces all existing sleep stages — sleep data is always sent as a complete snapshot
- * per date, so merging would create duplicates rather than preserve data.
+ * Upserts by (startTime, stage) composite key so split or partial payloads (multiple
+ * pings, retries, edited sessions) preserve previously-stored stages instead of
+ * silently dropping them.
  */
 function populateFromSegments(frontmatter: DailyFrontmatter, segments: SleepSegment[]): void {
-  frontmatter.sleepStages = segments.map((seg): SleepStageEntry => {
+  const newEntries = segments.map((seg): SleepStageEntry => {
     const entry: SleepStageEntry = {
       duration: roundTo(seg.duration, 2),
-      endTime: formatIsoTimestamp(seg.endTime) ?? '',
+      endTime: formatIsoTimestamp(seg.rawEndTime ?? seg.endTime) ?? '',
       stage: seg.stage,
-      startTime: formatIsoTimestamp(seg.startTime) ?? '',
+      startTime: formatIsoTimestamp(seg.rawStartTime ?? seg.startTime) ?? '',
     };
     if (seg.source) entry.source = seg.source;
     return entry;
   });
+
+  // Defensive: YAML-parsed frontmatter is loosely typed at runtime — guard against
+  // user-edited entries that don't match SleepStageEntry shape before keying on them.
+  const rawExisting = Array.isArray(frontmatter.sleepStages)
+    ? (frontmatter.sleepStages as unknown[])
+    : [];
+  const existingEntries = rawExisting.filter((entry) => isValidSleepStageEntry(entry));
+
+  const map = new Map<string, SleepStageEntry>();
+  for (const entry of existingEntries) {
+    map.set(`${entry.startTime}|${entry.stage}`, entry);
+  }
+  for (const entry of newEntries) {
+    map.set(`${entry.startTime}|${entry.stage}`, entry);
+  }
+
+  frontmatter.sleepStages = [...map.values()].toSorted((a, b) =>
+    a.startTime.localeCompare(b.startTime),
+  );
 }

@@ -29,13 +29,18 @@ export function createWorkoutFrontmatter(
 
   const newEntries = workouts.map((workout) => workoutToEntry(workout));
 
-  // Merge with existing entries (dedup by appleWorkoutId)
+  // Merge with existing entries (dedup by appleWorkoutId, deep-merge per field).
+  // Spread preserves any field present on `existing` but missing on `incoming`, so partial
+  // updates (e.g. workout re-sent later with HR recovery added but heartRateReadings omitted)
+  // do not wipe previously-stored data. workoutToEntry only sets fields when populated, so
+  // missing keys stay missing rather than overwriting with `undefined`.
   let allEntries: WorkoutEntry[];
   const existingEntries = frontmatter.workoutEntries;
   if (existingEntries && existingEntries.length > 0) {
     const existingMap = new Map(existingEntries.map((entry) => [entry.appleWorkoutId, entry]));
     for (const entry of newEntries) {
-      existingMap.set(entry.appleWorkoutId, entry);
+      const prior = existingMap.get(entry.appleWorkoutId);
+      existingMap.set(entry.appleWorkoutId, prior ? { ...prior, ...entry } : entry);
     }
     allEntries = [...existingMap.values()];
   } else {
