@@ -328,5 +328,3 @@ export const config = {
   retry: RetryConfig,
   server: ServerConfig,
 } as const;
-
-export default config;

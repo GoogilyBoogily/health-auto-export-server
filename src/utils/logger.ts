@@ -33,11 +33,7 @@ const colors = {
 } as const;
 
 // Data validation issue types for structured logging
-export type DataValidationIssue =
-  | 'DATE_BOUNDARY'
-  | 'INVALID_DATE'
-  | 'TYPE_MISMATCH'
-  | 'UNKNOWN_SLEEP_STAGE';
+export type DataValidationIssue = 'INVALID_DATE' | 'TYPE_MISMATCH' | 'UNKNOWN_SLEEP_STAGE';
 
 // Debug categories for filtering/identification
 export type DebugCategory =
@@ -127,25 +123,6 @@ export class Logger {
     },
   ): void {
     this.debugLog('AUTH', operation, details);
-  }
-
-  /**
-   * Log date falling on timezone boundary (UTC vs local date differs).
-   */
-  debugDateBoundary(
-    rawDate: Date,
-    utcDateKey: string,
-    localDateKey: string,
-    context: string,
-  ): void {
-    this.debugLog('DATA_VALIDATION', 'Date falls on timezone boundary', {
-      action: 'info',
-      context,
-      issue: 'DATE_BOUNDARY' satisfies DataValidationIssue,
-      localKey: localDateKey,
-      rawDate: rawDate.toISOString(),
-      utcKey: utcDateKey,
-    });
   }
 
   /**

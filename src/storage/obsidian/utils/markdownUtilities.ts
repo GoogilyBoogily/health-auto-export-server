@@ -7,8 +7,8 @@ import path from 'node:path';
 
 import { parse as parseYaml, Scalar, stringify as stringifyYaml } from 'yaml';
 
+import { ObsidianConfig } from '../../../config';
 import { logger } from '../../../utils/logger';
-import { DAILY_BODY_TEMPLATE, DAILY_TRACKING_PATH } from '../constants';
 import { getDateKey } from './dateUtilities';
 
 import type { DailyFrontmatter } from '../../../types';
@@ -40,7 +40,7 @@ export function getDailyFilePath(vaultPath: string, date: Date | string): string
     dateKey = getDateKey(d);
   }
 
-  return path.join(vaultPath, DAILY_TRACKING_PATH, String(year), month, `${dateKey}.md`);
+  return path.join(vaultPath, ObsidianConfig.dailyPath, String(year), month, `${dateKey}.md`);
 }
 
 /**
@@ -48,7 +48,7 @@ export function getDailyFilePath(vaultPath: string, date: Date | string): string
  */
 export function getDefaultBody(date: Date | string): string {
   const dateKey = getDateKey(date);
-  return DAILY_BODY_TEMPLATE.replace('{{date}}', dateKey);
+  return ObsidianConfig.bodyTemplate.replace('{{date}}', dateKey);
 }
 
 /**

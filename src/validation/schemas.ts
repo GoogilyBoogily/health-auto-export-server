@@ -82,5 +82,3 @@ export const IngestDataSchema = z.object({
     workouts: z.array(WorkoutDataSchema).optional(),
   }),
 });
-
-export type ValidatedIngestData = z.infer<typeof IngestDataSchema>;

@@ -17,10 +17,8 @@ import {
   writeMarkdownFile,
 } from './utils/markdownUtilities';
 
-import type { DailyFrontmatter, Metric, SaveResult, WorkoutData } from '../../types';
+import type { DailyFrontmatter, MetricsByType, SaveResult, WorkoutData } from '../../types';
 import type { SleepDateData } from './formatters/sleep';
-
-type MetricsByType = Record<string, Metric[]>;
 
 export class ObsidianStorage {
   private vaultPath: string;

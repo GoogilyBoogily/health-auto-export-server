@@ -29,16 +29,13 @@ export { MetricName } from './metricName';
 export type {
   BloodPressureReading,
   DailyFrontmatter,
-  HealthFrontmatter,
   HeartRateHealthReading,
   HeartRateReading,
-  MarkdownFile,
   MetricReading,
+  MetricsByType,
   RecoveryReading,
-  SleepFrontmatter,
   SleepStageEntry,
   WorkoutEntry,
-  WorkoutFrontmatter,
 } from './obsidian';
 
 // Storage types

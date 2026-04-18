@@ -3,6 +3,8 @@
  * Types for YAML frontmatter in Obsidian markdown files.
  */
 
+import type { Metric } from './metric';
+
 // ===== HEALTH TRACKING =====
 
 export interface BloodPressureReading {
@@ -24,13 +26,6 @@ export interface DailyFrontmatter {
   [key: string]: unknown; // health metrics + external data preserved during merge
 }
 
-export interface HealthFrontmatter {
-  date: string; // YYYY-MM-DD
-  [metricName: string]: (BloodPressureReading | HeartRateHealthReading | MetricReading)[] | string;
-}
-
-// ===== WORKOUT TRACKING =====
-
 /**
  * Heart rate reading for health tracking (distinct from workout HeartRateReading).
  */
@@ -42,6 +37,8 @@ export interface HeartRateHealthReading {
   source?: string;
 }
 
+// ===== WORKOUT TRACKING =====
+
 /**
  * Heart rate reading during a workout (per-minute data).
  */
@@ -52,16 +49,16 @@ export interface HeartRateReading {
   time: string; // ISO timestamp with timezone
 }
 
-export interface MarkdownFile {
-  body: string;
-  frontmatter: DailyFrontmatter;
-}
-
 export interface MetricReading {
   time: string; // ISO timestamp with timezone
   value: number;
   source?: string;
 }
+
+/**
+ * Metrics grouped by type name (e.g., "heart_rate" → HeartRateMetric[]).
+ */
+export type MetricsByType = Record<string, Metric[]>;
 
 /**
  * Heart rate recovery reading after workout ends.
@@ -72,11 +69,6 @@ export interface RecoveryReading {
 }
 
 // ===== SLEEP TRACKING =====
-
-export interface SleepFrontmatter {
-  date: string; // YYYY-MM-DD
-  sleepStages?: SleepStageEntry[];
-}
 
 /**
  * Individual sleep stage entry for frontmatter output.
@@ -90,7 +82,7 @@ export interface SleepStageEntry {
   source?: string;
 }
 
-// ===== COMMON TYPES =====
+// ===== WORKOUT ENTRY =====
 
 export interface WorkoutEntry {
   appleWorkoutId: string; // Original workout ID from Apple Health
@@ -111,9 +103,4 @@ export interface WorkoutEntry {
   recoveryReadings?: RecoveryReading[]; // Post-workout HR recovery data
   stepCadence?: number; // steps per minute
   stepCount?: number;
-}
-
-export interface WorkoutFrontmatter {
-  date: string; // YYYY-MM-DD
-  workoutEntries: WorkoutEntry[];
 }
