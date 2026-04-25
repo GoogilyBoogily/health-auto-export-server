@@ -293,4 +293,3 @@ export const MetricsConfig = {
    */
   validSleepStages: ['Asleep', 'Awake', 'Core', 'Deep', 'In Bed', 'REM'] as const,
 } as const;
-
