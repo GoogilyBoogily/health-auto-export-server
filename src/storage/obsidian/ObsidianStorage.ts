@@ -4,7 +4,9 @@
  */
 
 import { promises as fs } from 'node:fs';
+import path from 'node:path';
 
+import { ObsidianConfig } from '../../config';
 import { logger } from '../../utils/logger';
 import { withLock } from '../fileHelpers';
 import { createHealthFrontmatter, groupHealthMetricsByDate } from './formatters/health';
@@ -13,6 +15,7 @@ import { createWorkoutFrontmatter, groupWorkoutsByDate } from './formatters/work
 import {
   getDailyFilePath,
   getDefaultBody,
+  listMarkdownFiles,
   readMarkdownFile,
   writeMarkdownFile,
 } from './utils/markdownUtilities';
@@ -22,6 +25,8 @@ import type { SleepDateData } from './formatters/sleep';
 
 export class ObsidianStorage {
   private vaultPath: string;
+  private workoutIndex: Map<string, string> | undefined;
+  private workoutIndexBuild: Promise<Map<string, string>> | undefined;
 
   constructor(vaultPath: string) {
     this.vaultPath = vaultPath;
@@ -63,6 +68,13 @@ export class ObsidianStorage {
   }): Promise<SaveResult> {
     const { metrics, workouts } = parameters;
 
+    // Reroute workouts whose appleWorkoutId already lives at a different date —
+    // prevents cross-file duplicates when the workout's local-date shifts between
+    // payloads (e.g. phone TZ change).
+    const reroutedWorkouts = workouts
+      ? await this.rerouteWorkoutsToExistingDate(workouts)
+      : undefined;
+
     // Group each data type by date
     // groupHealthMetricsByDate filters OUT sleep; groupSleepMetricsByDate filters FOR sleep
     const healthByDate = metrics
@@ -71,8 +83,8 @@ export class ObsidianStorage {
     const sleepByDate = metrics
       ? groupSleepMetricsByDate(metrics)
       : new Map<string, SleepDateData>();
-    const workoutsByDate = workouts
-      ? groupWorkoutsByDate(workouts)
+    const workoutsByDate = reroutedWorkouts
+      ? groupWorkoutsByDate(reroutedWorkouts)
       : new Map<string, WorkoutData[]>();
 
     // Collect all unique date keys
@@ -93,28 +105,12 @@ export class ObsidianStorage {
       workoutDates: workoutsByDate.size,
     });
 
-    let totalSaved = 0;
-    let totalUpdated = 0;
-    const errors: string[] = [];
-
-    for (const dateKey of allDates) {
-      try {
-        const result = await this.saveDailyForDate(
-          dateKey,
-          healthByDate.get(dateKey),
-          sleepByDate.get(dateKey),
-          workoutsByDate.get(dateKey),
-        );
-        if (result.isNew) {
-          totalSaved++;
-        } else {
-          totalUpdated++;
-        }
-      } catch (error) {
-        logger.error('Failed to save daily file', error, { dateKey });
-        errors.push(`${dateKey}: ${(error as Error).message}`);
-      }
-    }
+    const { errors, totalSaved, totalUpdated } = await this.processDateSaves(
+      allDates,
+      healthByDate,
+      sleepByDate,
+      workoutsByDate,
+    );
 
     logger.debug('Obsidian daily data saved', {
       filesWritten: allDates.size,
@@ -128,6 +124,115 @@ export class ObsidianStorage {
       success: errors.length === 0,
       updated: totalUpdated,
     };
+  }
+
+  /**
+   * Scan the vault's daily folder once to build a map of
+   * `appleWorkoutId → dateKey`. Used to detect cross-file duplicates.
+   */
+  private async buildWorkoutIndex(): Promise<Map<string, string>> {
+    const index = new Map<string, string>();
+    const dailyRoot = path.join(this.vaultPath, ObsidianConfig.dailyPath);
+    const files = await listMarkdownFiles(dailyRoot);
+
+    for (const file of files) {
+      try {
+        const parsed = await readMarkdownFile(file);
+        const rawEntries = parsed?.frontmatter?.workoutEntries as unknown;
+        const dateKey = parsed?.frontmatter?.date;
+        if (!Array.isArray(rawEntries) || typeof dateKey !== 'string') continue;
+        for (const entry of rawEntries as unknown[]) {
+          const id = extractWorkoutId(entry);
+          if (id) index.set(id, dateKey);
+        }
+      } catch (error) {
+        logger.warn('Skipping unreadable daily file during workout index build', {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          file,
+        });
+      }
+    }
+
+    logger.debug('Workout index built', { entryCount: index.size, fileCount: files.length });
+    return index;
+  }
+
+  /**
+   * Lazy memoized accessor for the workout id → date map.
+   * Concurrent callers share a single in-flight build promise.
+   */
+  private async ensureWorkoutIndex(): Promise<Map<string, string>> {
+    if (this.workoutIndex) return this.workoutIndex;
+    this.workoutIndexBuild ??= this.buildWorkoutIndex();
+    this.workoutIndex = await this.workoutIndexBuild;
+    return this.workoutIndex;
+  }
+
+  /**
+   * Iterate the per-date save calls, accumulate saved/updated counts and errors,
+   * and refresh the workout index with successfully written workouts.
+   */
+  private async processDateSaves(
+    allDates: Set<string>,
+    healthByDate: Map<string, MetricsByType>,
+    sleepByDate: Map<string, SleepDateData>,
+    workoutsByDate: Map<string, WorkoutData[]>,
+  ): Promise<{ errors: string[]; totalSaved: number; totalUpdated: number }> {
+    let totalSaved = 0;
+    let totalUpdated = 0;
+    const errors: string[] = [];
+
+    for (const dateKey of allDates) {
+      const dateWorkouts = workoutsByDate.get(dateKey);
+      try {
+        const result = await this.saveDailyForDate(
+          dateKey,
+          healthByDate.get(dateKey),
+          sleepByDate.get(dateKey),
+          dateWorkouts,
+        );
+        if (result.isNew) totalSaved++;
+        else totalUpdated++;
+        this.recordWorkoutsInIndex(dateKey, dateWorkouts);
+      } catch (error) {
+        logger.error('Failed to save daily file', error, { dateKey });
+        errors.push(`${dateKey}: ${(error as Error).message}`);
+      }
+    }
+
+    return { errors, totalSaved, totalUpdated };
+  }
+
+  /**
+   * Update the workout index with ids written for a given date, when the index
+   * has already been built. New ids without a prior bootstrap are added on
+   * the next index access.
+   */
+  private recordWorkoutsInIndex(dateKey: string, workouts: WorkoutData[] | undefined): void {
+    if (!workouts || !this.workoutIndex) return;
+    for (const w of workouts) this.workoutIndex.set(w.id, dateKey);
+  }
+
+  /**
+   * Replace each workout's `sourceDate` with the date its `appleWorkoutId` was
+   * previously written to (if any). Workouts that have never been seen keep
+   * their incoming sourceDate.
+   */
+  private async rerouteWorkoutsToExistingDate(workouts: WorkoutData[]): Promise<WorkoutData[]> {
+    if (workouts.length === 0) return workouts;
+    const index = await this.ensureWorkoutIndex();
+    return workouts.map((workout) => {
+      const existingDate = index.get(workout.id);
+      if (existingDate && existingDate !== workout.sourceDate) {
+        logger.info('Rerouting workout to existing daily file', {
+          appleWorkoutId: workout.id,
+          fromDate: workout.sourceDate,
+          toDate: existingDate,
+        });
+        return { ...workout, sourceDate: existingDate };
+      }
+      return workout;
+    });
   }
 
   /**
@@ -188,4 +293,14 @@ export class ObsidianStorage {
       return { isNew };
     });
   }
+}
+
+/**
+ * Extract `appleWorkoutId` from a YAML-parsed entry of unknown shape.
+ * Returns undefined when the entry is malformed or missing the id field.
+ */
+function extractWorkoutId(entry: unknown): string | undefined {
+  if (typeof entry !== 'object' || entry === null) return undefined;
+  const id = (entry as { appleWorkoutId?: unknown }).appleWorkoutId;
+  return typeof id === 'string' ? id : undefined;
 }

@@ -12,6 +12,7 @@ import type {
   MetricsByType,
   SleepMetric,
   SleepSegment,
+  SleepStage,
   SleepStageEntry,
 } from '../../../types';
 
@@ -45,8 +46,16 @@ export function createSleepFrontmatter(
   // Collect all segments from all entries
   const allSegments = collectAndSortSegments(sleepMetrics);
 
+  // Legacy aggregated payloads (no per-stage segments) carry totals on the
+  // SleepMetric directly — synthesize stage entries spanning the bed window
+  // so legacy data still lands in sleepStages instead of being dropped.
   if (allSegments.length === 0) {
-    logger.warn('Sleep data without segments — nothing to store', { dateKey });
+    const legacySegments = legacyMetricsToSegments(sleepMetrics);
+    if (legacySegments.length === 0) {
+      logger.warn('Sleep data without segments or legacy totals — nothing to store', { dateKey });
+      return frontmatter;
+    }
+    populateFromSegments(frontmatter, legacySegments);
     return frontmatter;
   }
 
@@ -131,10 +140,55 @@ function isValidSleepStageEntry(entry: unknown): entry is SleepStageEntry {
 }
 
 /**
+ * Synthesize SleepSegment objects from legacy aggregated SleepMetric totals.
+ * Legacy payloads carry `core`/`deep`/`rem`/`awake`/`asleep` durations plus
+ * `sleepStart`/`sleepEnd` (and `inBedStart`/`inBedEnd`) but no per-stage
+ * segments. We emit one synthesized segment per non-zero stage spanning the
+ * sleep window so the data persists in `sleepStages`. Boundaries are coarse
+ * (whole sleep window per stage) but the totals survive — better than
+ * dropping the entry entirely.
+ */
+function legacyMetricsToSegments(metrics: SleepMetric[]): SleepSegment[] {
+  const segments: SleepSegment[] = [];
+  for (const metric of metrics) {
+    const start = metric.sleepStart;
+    const end = metric.sleepEnd;
+    if (
+      !(start instanceof Date) ||
+      !(end instanceof Date) ||
+      Number.isNaN(start.getTime()) ||
+      Number.isNaN(end.getTime())
+    ) {
+      continue;
+    }
+    const stageDurations: { duration: number; stage: SleepStage }[] = [
+      { duration: metric.core, stage: 'core' },
+      { duration: metric.deep, stage: 'deep' },
+      { duration: metric.rem, stage: 'rem' },
+      { duration: metric.awake, stage: 'awake' },
+      { duration: metric.asleep ?? 0, stage: 'asleep' },
+    ];
+    for (const { duration, stage } of stageDurations) {
+      if (duration > 0) {
+        segments.push({
+          duration,
+          endTime: end,
+          source: metric.source,
+          stage,
+          startTime: start,
+        });
+      }
+    }
+  }
+  return segments;
+}
+
+/**
  * Populate frontmatter from individual sleep segments.
- * Upserts by (startTime, stage) composite key so split or partial payloads (multiple
+ * Upserts by same-stage interval overlap so split or partial payloads (multiple
  * pings, retries, edited sessions) preserve previously-stored stages instead of
- * silently dropping them.
+ * silently dropping them, while Apple Health boundary revisions (same stage,
+ * shifted startTime) replace the older entry instead of duplicating it.
  */
 function populateFromSegments(frontmatter: DailyFrontmatter, segments: SleepSegment[]): void {
   const newEntries = segments.map((seg): SleepStageEntry => {
@@ -155,15 +209,36 @@ function populateFromSegments(frontmatter: DailyFrontmatter, segments: SleepSegm
     : [];
   const existingEntries = rawExisting.filter((entry) => isValidSleepStageEntry(entry));
 
-  const map = new Map<string, SleepStageEntry>();
-  for (const entry of existingEntries) {
-    map.set(`${entry.startTime}|${entry.stage}`, entry);
-  }
-  for (const entry of newEntries) {
-    map.set(`${entry.startTime}|${entry.stage}`, entry);
+  // Newer-wins, same-stage overlap merge. Walking existing first then new means
+  // any new entry that overlaps a prior same-stage entry replaces it. Also
+  // collapses legacy duplicates left by the earlier exact-key dedup.
+  const merged: SleepStageEntry[] = [];
+  for (const entry of [...existingEntries, ...newEntries]) {
+    const overlapIndex = merged.findIndex(
+      (kept) => kept.stage === entry.stage && stageEntriesOverlap(kept, entry),
+    );
+    if (overlapIndex === -1) {
+      merged.push(entry);
+    } else {
+      merged[overlapIndex] = entry;
+    }
   }
 
-  frontmatter.sleepStages = [...map.values()].toSorted((a, b) =>
-    a.startTime.localeCompare(b.startTime),
-  );
+  frontmatter.sleepStages = merged.toSorted((a, b) => a.startTime.localeCompare(b.startTime));
+}
+
+/**
+ * True when two sleep stage entries' time intervals overlap.
+ * Returns false if either timestamp fails to parse — defensive against
+ * malformed entries from earlier writes or manual edits.
+ */
+function stageEntriesOverlap(a: SleepStageEntry, b: SleepStageEntry): boolean {
+  const aStart = Date.parse(a.startTime);
+  const aEnd = Date.parse(a.endTime);
+  const bStart = Date.parse(b.startTime);
+  const bEnd = Date.parse(b.endTime);
+  if (Number.isNaN(aStart) || Number.isNaN(aEnd) || Number.isNaN(bStart) || Number.isNaN(bEnd)) {
+    return false;
+  }
+  return aStart < bEnd && bStart < aEnd;
 }

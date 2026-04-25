@@ -52,12 +52,46 @@ export function getDefaultBody(date: Date | string): string {
 }
 
 /**
+ * Recursively list all `.md` files under a directory.
+ * Returns empty array if the directory does not exist.
+ */
+export async function listMarkdownFiles(directory: string): Promise<string[]> {
+  const out: string[] = [];
+  const stack: string[] = [directory];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) continue;
+    let entries;
+    try {
+      entries = await fs.readdir(current, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(full);
+      } else if (entry.isFile() && entry.name.endsWith('.md')) {
+        out.push(full);
+      }
+    }
+  }
+
+  return out;
+}
+
+/**
  * Parse a markdown file with YAML frontmatter.
  * Returns frontmatter object and body content.
+ * `parseFailed` flags malformed YAML so callers can preserve a backup of
+ * the corrupt original before any rewrite overwrites recoverable user data.
  */
 export function parseMarkdown(content: string): {
   body: string;
   frontmatter: DailyFrontmatter | undefined;
+  parseFailed?: boolean;
 } {
   const match = FRONTMATTER_REGEX.exec(content);
   if (!match) {
@@ -69,20 +103,31 @@ export function parseMarkdown(content: string): {
     return { body: match[2], frontmatter };
   } catch (error) {
     logger.warn('Failed to parse YAML frontmatter, treating as plain markdown', { error });
-    return { body: content, frontmatter: undefined };
+    return { body: content, frontmatter: undefined, parseFailed: true };
   }
 }
 
 /**
  * Read a markdown file with frontmatter.
- * Returns undefined if file doesn't exist.
+ * Returns undefined if file doesn't exist. When YAML parsing fails, backs up
+ * the original content alongside the file before returning so the next write
+ * cannot silently destroy user-edited keys.
  */
-export async function readMarkdownFile(
-  filePath: string,
-): Promise<undefined | { body: string; frontmatter: DailyFrontmatter | undefined }> {
+export async function readMarkdownFile(filePath: string): Promise<
+  | undefined
+  | {
+      body: string;
+      frontmatter: DailyFrontmatter | undefined;
+      parseFailed?: boolean;
+    }
+> {
   try {
     const content = await fs.readFile(filePath, 'utf8');
-    return parseMarkdown(content);
+    const parsed = parseMarkdown(content);
+    if (parsed.parseFailed) {
+      await backupCorruptFile(filePath, content);
+    }
+    return parsed;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return undefined;
@@ -146,6 +191,23 @@ export async function writeMarkdownFile(
       // Ignore cleanup errors - file may not exist
     }
     throw error;
+  }
+}
+
+/**
+ * Save a backup of a file whose YAML frontmatter could not be parsed, so a
+ * subsequent rewrite cannot silently destroy recoverable user-edited keys.
+ * Backup name: `<filePath>.corrupt.<timestamp>.bak`. Idempotent on the
+ * same millisecond — failures here are logged but never thrown.
+ */
+async function backupCorruptFile(filePath: string, content: string): Promise<void> {
+  const backupPath = `${filePath}.corrupt.${String(Date.now())}.bak`;
+  try {
+    await fs.writeFile(backupPath, content, { encoding: 'utf8', flag: 'wx' });
+    logger.warn('Backed up file with unparseable frontmatter', { backupPath, filePath });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return;
+    logger.error('Failed to back up corrupt frontmatter file', error, { backupPath, filePath });
   }
 }
 

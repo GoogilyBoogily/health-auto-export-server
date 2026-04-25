@@ -47,11 +47,14 @@ export const prepareMetrics = (
   // Create request-scoped context for validation tracking
   const mappingContext = createMappingContext(log);
 
-  // Group metrics by type and map the data
+  // Group metrics by type and map the data.
+  // Lowercase the name so casing drift between payloads (e.g. "heart_rate" vs
+  // "Heart_Rate") collapses into a single bucket and produces a stable
+  // frontmatter key after snakeToCamelCase conversion.
   const metricsByType: Record<string, Metric[]> = {};
   for (const metric of metricsData) {
     const mappedMetrics = mapMetric(metric, mappingContext);
-    const key = metric.name;
+    const key = metric.name.toLowerCase();
     metricsByType[key] ??= [];
     metricsByType[key].push(...mappedMetrics);
   }

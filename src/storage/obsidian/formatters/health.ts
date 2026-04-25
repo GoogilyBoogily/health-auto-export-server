@@ -119,9 +119,13 @@ export function groupHealthMetricsByDate(metricsByType: MetricsByType): Map<stri
 /**
  * Composite dedup key: same-instant readings from different sources must coexist.
  * Empty source slot still distinguishes "no source" from any named source.
+ *
+ * Time is normalized via formatIsoTimestamp so legacy on-disk entries with
+ * fractional seconds collapse onto the same key as new ms-stripped readings.
  */
 function dedupKey(r: Reading): string {
-  return `${r.time}|${r.source ?? ''}`;
+  const normalizedTime = formatIsoTimestamp(r.time) ?? r.time;
+  return `${normalizedTime}|${r.source ?? ''}`;
 }
 
 /**

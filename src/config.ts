@@ -294,37 +294,3 @@ export const MetricsConfig = {
   validSleepStages: ['Asleep', 'Awake', 'Core', 'Deep', 'In Bed', 'REM'] as const,
 } as const;
 
-// =============================================================================
-// HTTP STATUS CODES
-// =============================================================================
-
-export const HttpStatus = {
-  BAD_REQUEST: 400,
-  INTERNAL_SERVER_ERROR: 500,
-  MULTI_STATUS: 207,
-  OK: 200,
-  REQUEST_TIMEOUT: 408,
-  TOO_MANY_REQUESTS: 429,
-  UNAUTHORIZED: 401,
-} as const;
-
-// =============================================================================
-// COMBINED EXPORT
-// =============================================================================
-
-/**
- * Complete application configuration.
- * Import this for access to all configuration sections.
- */
-export const config = {
-  auth: AuthConfig,
-  cors: CorsConfig,
-  fileLock: FileLockConfig,
-  httpStatus: HttpStatus,
-  metrics: MetricsConfig,
-  obsidian: ObsidianConfig,
-  rateLimit: RateLimitConfig,
-  request: RequestConfig,
-  retry: RetryConfig,
-  server: ServerConfig,
-} as const;

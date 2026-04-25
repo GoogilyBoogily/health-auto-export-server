@@ -34,13 +34,15 @@ export function createWorkoutFrontmatter(
   // updates (e.g. workout re-sent later with HR recovery added but heartRateReadings omitted)
   // do not wipe previously-stored data. workoutToEntry only sets fields when populated, so
   // missing keys stay missing rather than overwriting with `undefined`.
+  // Time-series array fields (heartRateReadings, recoveryReadings) are merged by `time`
+  // so a truncated re-push augments rather than replaces the prior series.
   let allEntries: WorkoutEntry[];
   const existingEntries = frontmatter.workoutEntries;
   if (existingEntries && existingEntries.length > 0) {
     const existingMap = new Map(existingEntries.map((entry) => [entry.appleWorkoutId, entry]));
     for (const entry of newEntries) {
       const prior = existingMap.get(entry.appleWorkoutId);
-      existingMap.set(entry.appleWorkoutId, prior ? { ...prior, ...entry } : entry);
+      existingMap.set(entry.appleWorkoutId, prior ? mergeWorkoutEntry(prior, entry) : entry);
     }
     allEntries = [...existingMap.values()];
   } else {
@@ -117,6 +119,45 @@ function extractRecoveryReadings(workout: WorkoutData): RecoveryReading[] | unde
     time: formatIsoTimestamp(hr.date) ?? '',
     value: Math.round(hr.Avg),
   }));
+}
+
+/**
+ * Merge two readings arrays by `time`, with incoming entries winning on collision.
+ * Preserves prior entries for timestamps the new payload omitted, preventing
+ * truncated re-pushes from shrinking the series.
+ */
+function mergeReadingsByTime<T extends { time: string }>(
+  prior: T[] | undefined,
+  incoming: T[] | undefined,
+): T[] | undefined {
+  if (!prior || prior.length === 0) return incoming;
+  if (!incoming || incoming.length === 0) return prior;
+  const byTime = new Map<string, T>();
+  for (const r of prior) byTime.set(r.time, r);
+  for (const r of incoming) byTime.set(r.time, r);
+  return [...byTime.values()].toSorted((a, b) => a.time.localeCompare(b.time));
+}
+
+/**
+ * Merge an incoming workout entry into a prior entry. Scalar fields take
+ * incoming value when present (spread); array fields are unioned by `time` so
+ * the longer historical series is never lost when a partial re-push arrives.
+ */
+function mergeWorkoutEntry(prior: WorkoutEntry, incoming: WorkoutEntry): WorkoutEntry {
+  const merged: WorkoutEntry = { ...prior, ...incoming };
+  const heartRate = mergeReadingsByTime(prior.heartRateReadings, incoming.heartRateReadings);
+  if (heartRate) {
+    merged.heartRateReadings = heartRate;
+  } else {
+    delete merged.heartRateReadings;
+  }
+  const recovery = mergeReadingsByTime(prior.recoveryReadings, incoming.recoveryReadings);
+  if (recovery) {
+    merged.recoveryReadings = recovery;
+  } else {
+    delete merged.recoveryReadings;
+  }
+  return merged;
 }
 
 /**

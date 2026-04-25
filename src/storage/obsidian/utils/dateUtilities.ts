@@ -4,9 +4,14 @@
 
 // TZ-stable: identical input → identical output regardless of server timezone.
 // Used as a dedup key, so any drift would create silent duplicates.
+//
+// Both regexes capture the offset hours/minutes so we can emit the canonical
+// `±HH:MM` form from inputs that arrive as either `±HHMM` or `±HH:MM`.
+// Fractional seconds are dropped during emit so payloads with vs without
+// milliseconds produce identical dedup keys.
 const HAE_DATE_REGEX =
   /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})\s*([+-])(\d{2}):?(\d{2})$/;
-const ISO_OFFSET_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:\d{2}$/;
+const ISO_OFFSET_REGEX = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?([+-])(\d{2}):?(\d{2})$/;
 const ISO_UTC_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
 export function formatIsoTimestamp(date: Date | string | undefined): string | undefined {
@@ -21,15 +26,24 @@ export function formatIsoTimestamp(date: Date | string | undefined): string | un
       return `${y}-${mo}-${d}T${h}:${mi}:${s}${sign}${oh}:${om}`;
     }
 
-    if (ISO_OFFSET_REGEX.test(trimmed) || ISO_UTC_REGEX.test(trimmed)) {
-      return trimmed;
+    const iso = ISO_OFFSET_REGEX.exec(trimmed);
+    if (iso) {
+      const [, datetime, sign, oh, om] = iso;
+      return `${datetime}${sign}${oh}:${om}`;
+    }
+
+    if (ISO_UTC_REGEX.test(trimmed)) {
+      return trimmed.replace(/\.\d+Z$/, 'Z');
     }
   }
 
+  // Date input loses the original TZ offset (Date stores only an instant). The
+  // mapper preserves the raw string in `rawDate`/`rawStartTime`/`rawEndTime` so
+  // this branch is only hit when no raw string is available — fall back to UTC.
   const d = new Date(date);
   if (Number.isNaN(d.getTime())) return undefined;
 
-  return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+  return d.toISOString().replace(/\.\d+Z$/, 'Z');
 }
 
 /**
