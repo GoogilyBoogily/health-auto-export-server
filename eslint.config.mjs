@@ -168,6 +168,6 @@ export default tseslint.config(
 
   // Ignores
   {
-    ignores: ['node_modules/**', 'dist/**', 'coverage/**', 'scripts/**', 'data/**'],
+    ignores: ['node_modules/**', 'dist/**', 'coverage/**', 'scripts/**', 'data/**', '.remember/**'],
   },
 );
