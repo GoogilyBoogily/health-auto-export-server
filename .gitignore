@@ -5,3 +5,13 @@ dist/
 .DS_Store
 
 seed_data/*
+
+.remember/
+.claude/
+.serena/
+
+# Captured traffic and sample payloads used for local analysis.
+# The log contains device names and an API key prefix; the samples are personal health data.
+health-auto-export-logs.log
+*-sample.json
+unified-sample.yaml
