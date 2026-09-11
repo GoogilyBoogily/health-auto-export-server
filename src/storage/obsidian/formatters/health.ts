@@ -232,9 +232,18 @@ function normalizeSource(source: string | undefined): string {
 }
 
 /**
- * The numeric value of a reading, tolerating the handful of string-typed values in the vault.
- * A bare `>` against a string compares lexically, which is how `"8.8e-8"` beats a real total.
+ * The magnitude of a reading, for deciding which survives a collapse.
+ *
+ * Not every reading has `value`: heart rate carries `avg`/`max`/`min` and blood pressure carries
+ * `systolic`/`diastolic`. Reading only `value` made both sides evaluate to 0, so `prior > incoming`
+ * was always false and the later reading always won — turning "the larger value wins" into
+ * order-dependent last-write-wins for precisely the two metrics where the wrong survivor matters:
+ * a peak heart rate quietly revised downward, a hypertensive reading erased by a normal one.
+ *
+ * Coerced with `Number` because a handful of stored values are strings, and a bare `>` against a
+ * string compares lexically — which is how `"8.8e-8"` beats a real total.
  */
 function readingValue(r: Reading): number {
-  return Number((r as { value?: unknown }).value) || 0;
+  const candidate = r as { avg?: unknown; systolic?: unknown; value?: unknown };
+  return Number(candidate.value ?? candidate.avg ?? candidate.systolic) || 0;
 }
