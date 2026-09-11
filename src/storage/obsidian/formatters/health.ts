@@ -160,8 +160,12 @@ export function collapseReadings<T extends Reading>(metricType: string, readings
   for (const reading of readings) {
     const key = dedupKey(reading, metricType);
     const prior = byKey.get(key);
-    if (prior && readingValue(prior) > readingValue(reading)) continue;
-    byKey.set(key, reading);
+    if (!prior) {
+      byKey.set(key, reading);
+      continue;
+    }
+    const winner = readingValue(prior) > readingValue(reading) ? prior : reading;
+    byKey.set(key, withUnitsFrom(winner, winner === prior ? reading : prior));
   }
   return [...byKey.values()].toSorted((a, b) => instantOf(a.time) - instantOf(b.time));
 }
@@ -246,4 +250,22 @@ function normalizeSource(source: string | undefined): string {
 function readingValue(r: Reading): number {
   const candidate = r as { avg?: unknown; systolic?: unknown; value?: unknown };
   return Number(candidate.value ?? candidate.avg ?? candidate.systolic) || 0;
+}
+
+/**
+ * Keep the winner's magnitude, but rescue the units it does not carry.
+ *
+ * `units` is metadata, not a measurement, so the reading that happens to be larger should not also
+ * get to decide that the hour has no units. Nearly every reading already stored predates the units
+ * feature, so without this a stored unit-less value that beats the incoming one blocks units from
+ * ever landing on that instant — and the next sync loses them again, forever. Observed live:
+ * `stairSpeedUp` and `physicalEffort` both kept a larger stored value and discarded `ft/s` and
+ * `kcal/hr·kg` with it, which is why a payload of 18 metrics produced 16 units-bearing readings.
+ */
+function withUnitsFrom<T extends Reading>(winner: T, loser: T): T {
+  // The type declares `units` as required, but stored readings routinely lack it, so this has to
+  // be a runtime check rather than a type-level one.
+  const unitsOf = (reading: Reading): string | undefined => (reading as { units?: string }).units;
+  if (unitsOf(winner) !== undefined || unitsOf(loser) === undefined) return winner;
+  return { ...winner, units: unitsOf(loser) } as T;
 }

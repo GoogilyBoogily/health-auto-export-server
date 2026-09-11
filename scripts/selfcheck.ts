@@ -405,4 +405,31 @@ pass('non-string dates are rejected and counted');
   pass('the collapse winner is the larger reading, not the last one');
 }
 
+// --- Winning on value must not also decide that the hour has no units. ---
+{
+  // The live case: 2026-09-11 sent stairSpeedUp 0.764 with `ft/s` against a stored 1.314 with
+  // none. The larger stored value won and took the units with it into the bin.
+  const stored = { source: 'watch', time: '2026-09-11T14:00:00-05:00', value: 1.313691259682022 };
+  const incoming = {
+    source: 'watch',
+    time: '2026-09-11T14:00:00-05:00',
+    units: 'ft/s',
+    value: 0.764324410459188,
+  };
+
+  for (const order of [
+    [stored, incoming],
+    [incoming, stored],
+  ]) {
+    const [kept] = collapseReadings('stair_speed_up', order as never[]) as {
+      units?: string;
+      value: number;
+    }[];
+    assert.equal(kept.value, 1.313691259682022, 'the larger value still wins');
+    assert.equal(kept.units, 'ft/s', 'and it inherits the units it would otherwise have discarded');
+  }
+
+  pass('a unit-less winner inherits units from the reading it beat');
+}
+
 console.log(`\n${String(checks.length)} checks passed. Scratch: ${scratch}`);
