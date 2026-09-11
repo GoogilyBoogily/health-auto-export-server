@@ -16,7 +16,7 @@
  *   bun run scripts/heal-vault.ts [vaultPath]            # report only, writes nothing
  *   bun run scripts/heal-vault.ts [vaultPath] --commit   # write
  */
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { LEGACY_OWNED_KEYS, ObsidianConfig } from '../src/config';
@@ -147,7 +147,16 @@ for (const file of notes) {
     .join(', ');
   console.log(`  ${path.basename(file)}  -${String(plan.removed).padStart(4)}  ${detail}`);
 
-  if (commit) writeFileSync(file, plan.after, 'utf8');
+  // Temp-and-rename, the same way the write path does it. A torn write is how notes end up with
+  // two frontmatter blocks in the first place, and Obsidian keeps these files open and rewrites
+  // them from its own cache. No lock: nothing else that touches these notes takes one, so a lock
+  // here would guard against nothing. The rename is what actually makes a half-written file
+  // impossible.
+  if (commit) {
+    const temporaryPath = `${file}.tmp.${String(process.pid)}`;
+    writeFileSync(temporaryPath, plan.after, 'utf8');
+    renameSync(temporaryPath, file);
+  }
 }
 
 console.log(`\n  ${'metric'.padEnd(30)} ${'removed'.padStart(8)}`);
