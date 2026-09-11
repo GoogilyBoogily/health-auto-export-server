@@ -35,7 +35,9 @@ export type {
   MetricsByType,
   RecoveryReading,
   SleepStageEntry,
+  SleepSummary,
   WorkoutEntry,
+  WorkoutSeriesReading,
 } from './obsidian';
 
 // Storage types

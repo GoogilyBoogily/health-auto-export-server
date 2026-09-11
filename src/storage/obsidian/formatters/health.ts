@@ -4,6 +4,7 @@
  * Stores every metric type as unaggregated timestamped reading lists.
  */
 
+import { HOURLY_BUCKETED_METRICS } from '../../../config';
 import { logger } from '../../../utils/logger';
 import { snakeToCamelCase } from '../../../utils/stringUtilities';
 import { formatIsoTimestamp } from '../utils/dateUtilities';
@@ -19,8 +20,9 @@ import type {
   MetricReading,
   MetricsByType,
 } from '../../../types';
+import type { Logger } from '../../../utils/logger';
 
-type Reading = BloodPressureReading | HeartRateHealthReading | MetricReading;
+export type Reading = BloodPressureReading | HeartRateHealthReading | MetricReading;
 
 /**
  * Merge health metrics into existing frontmatter for a specific date.
@@ -31,6 +33,7 @@ export function createHealthFrontmatter(
   dateKey: string,
   metricsByType: MetricsByType,
   existing?: DailyFrontmatter,
+  log: Logger = logger,
 ): DailyFrontmatter {
   const frontmatter: DailyFrontmatter = existing ?? { date: dateKey };
 
@@ -40,7 +43,7 @@ export function createHealthFrontmatter(
   const metricCounts = Object.fromEntries(
     Object.entries(metricsByType).map(([k, v]) => [k, v.length]),
   );
-  logger.debugLog('TRANSFORM', 'Health frontmatter creation started', {
+  log.debugLog('TRANSFORM', 'Health frontmatter creation started', {
     dateKey,
     hasExisting: existing !== undefined,
     metricCounts,
@@ -58,19 +61,11 @@ export function createHealthFrontmatter(
         typeof r === 'object' && r !== null && typeof (r as Reading).time === 'string',
     );
 
-    // Composite key (time|source) so same-instant readings from different sources don't collide
-    const readingMap = new Map<string, Reading>();
-    for (const r of existingReadings) {
-      readingMap.set(dedupKey(r), r);
-    }
-    for (const r of newReadings) {
-      readingMap.set(dedupKey(r), r);
-    }
-    frontmatter[key] = [...readingMap.values()].toSorted((a, b) => a.time.localeCompare(b.time));
+    frontmatter[key] = collapseReadings(metricType, [...existingReadings, ...newReadings]);
   }
 
   const fieldsSet = Object.keys(frontmatter);
-  logger.debugLog('TRANSFORM', 'Health frontmatter completed', {
+  log.debugLog('TRANSFORM', 'Health frontmatter completed', {
     dateKey,
     fieldsSet,
     metricTypeCount: metricTypes.length,
@@ -83,7 +78,10 @@ export function createHealthFrontmatter(
  * Group metrics by date for health tracking.
  * All metric types except sleep go to health files.
  */
-export function groupHealthMetricsByDate(metricsByType: MetricsByType): Map<string, MetricsByType> {
+export function groupHealthMetricsByDate(
+  metricsByType: MetricsByType,
+  log: Logger = logger,
+): Map<string, MetricsByType> {
   const byDate = new Map<string, MetricsByType>();
 
   for (const [metricType, metrics] of Object.entries(metricsByType)) {
@@ -106,7 +104,7 @@ export function groupHealthMetricsByDate(metricsByType: MetricsByType): Map<stri
     (total, t) => total + metricsByType[t].length,
     0,
   );
-  logger.debugLog('TRANSFORM', 'Health metrics grouped by date', {
+  log.debugLog('TRANSFORM', 'Health metrics grouped by date', {
     dateKeys: [...byDate.keys()],
     datesWithData: byDate.size,
     inputMetricTypes,
@@ -117,15 +115,60 @@ export function groupHealthMetricsByDate(metricsByType: MetricsByType): Map<stri
 }
 
 /**
- * Composite dedup key: same-instant readings from different sources must coexist.
- * Empty source slot still distinguishes "no source" from any named source.
+ * Dedup key for a stored reading.
  *
- * Time is normalized via formatIsoTimestamp so legacy on-disk entries with
- * fractional seconds collapse onto the same key as new ms-stripped readings.
+ * Keyed on the parsed instant rather than the timestamp text: the same moment arrives under
+ * different UTC offsets when the device changes timezone, and two spellings of one instant are
+ * one reading. Unparseable timestamps fall back to the raw text so a bad value cannot collapse
+ * every reading in the array into one.
+ *
+ * Metrics the exporter delivers as one bucket per hour additionally fold to the hour, because it
+ * re-buckets the same samples against a different anchor on every sync and those buckets are the
+ * same hour re-reported. Everything else keeps its exact instant — several genuine readings in one
+ * hour are normal for a discrete measurement, and for an event total two entries an hour apart are
+ * two distinct events.
+ *
+ * `source` stays in the key so readings attributed to different device sets coexist.
  */
-function dedupKey(r: Reading): string {
-  const normalizedTime = formatIsoTimestamp(r.time) ?? r.time;
-  return `${normalizedTime}|${r.source ?? ''}`;
+function dedupKey(r: Reading, metricType: string): string {
+  const instant = instantOf(r.time);
+  if (Number.isNaN(instant)) return `raw:${r.time}|${normalizeSource(r.source)}`;
+
+  const bucket = HOURLY_BUCKETED_METRICS.has(snakeToCamelCase(metricType))
+    ? Math.floor(instant / MILLISECONDS_PER_HOUR)
+    : instant;
+
+  return `${String(bucket)}|${normalizeSource(r.source)}`;
+}
+
+const MILLISECONDS_PER_HOUR = 3_600_000;
+
+/**
+ * Collapse a metric's readings onto the dedup key and order them by instant.
+ *
+ * Exported because the repair pass needs to apply exactly this rule to already-stored readings.
+ * Two implementations of a dedup rule is two dedup rules.
+ *
+ * Where readings collapse onto one key the larger value wins. Insertion order is not freshness
+ * order: the exporter sends its rolling window as concurrent requests where adjacent ones share a
+ * date, so a partial bucket for an hour still in progress can arrive after the complete one.
+ * Last-write-wins would store whichever request happened to finish last; the largest value for a
+ * bucket is the most complete report of it.
+ */
+export function collapseReadings<T extends Reading>(metricType: string, readings: T[]): T[] {
+  const byKey = new Map<string, T>();
+  for (const reading of readings) {
+    const key = dedupKey(reading, metricType);
+    const prior = byKey.get(key);
+    if (prior && readingValue(prior) > readingValue(reading)) continue;
+    byKey.set(key, reading);
+  }
+  return [...byKey.values()].toSorted((a, b) => instantOf(a.time) - instantOf(b.time));
+}
+
+/** Epoch milliseconds for a stored timestamp; NaN when it does not parse. */
+function instantOf(time: string): number {
+  return Date.parse(time);
 }
 
 /**
@@ -144,6 +187,7 @@ function metricToReading(metric: Metric): Reading {
       max: metric.Max,
       min: metric.Min,
       time,
+      units: metric.units,
     };
     if (metric.source) reading.source = metric.source;
     return reading;
@@ -155,6 +199,7 @@ function metricToReading(metric: Metric): Reading {
       diastolic: metric.diastolic,
       systolic: metric.systolic,
       time,
+      units: metric.units,
     };
     if (metric.source) reading.source = metric.source;
     return reading;
@@ -163,8 +208,33 @@ function metricToReading(metric: Metric): Reading {
   // Default: BaseMetric with qty
   const reading: MetricReading = {
     time,
+    units: base.units,
     value: base.qty,
   };
   if (base.source) reading.source = base.source;
   return reading;
+}
+
+/**
+ * Canonical form of a `|`-separated device list: trimmed, de-duplicated, sorted.
+ *
+ * The list is a set, but the exporter spells it inconsistently — order varies between exports,
+ * spacing varies, and a device occasionally repeats. Those spellings all describe one attribution
+ * and must produce one key.
+ */
+function normalizeSource(source: string | undefined): string {
+  if (!source) return '';
+  const devices = source
+    .split('|')
+    .map((device) => device.trim())
+    .filter(Boolean);
+  return [...new Set(devices)].toSorted((a, b) => a.localeCompare(b)).join('|');
+}
+
+/**
+ * The numeric value of a reading, tolerating the handful of string-typed values in the vault.
+ * A bare `>` against a string compares lexically, which is how `"8.8e-8"` beats a real total.
+ */
+function readingValue(r: Reading): number {
+  return Number((r as { value?: unknown }).value) || 0;
 }
