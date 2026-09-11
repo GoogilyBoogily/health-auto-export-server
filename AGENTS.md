@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## Commands
 
@@ -76,6 +76,7 @@ this as its own figure rather than hiding it. `bun run scripts/heal-vault.ts` co
 files (dry run by default).
 
 
+
 ### Key Directories
 
 - `src/controllers/` - `ingester.ts` orchestrates; `metrics.ts` and `workouts.ts` handle preparation (mapping)
@@ -93,6 +94,22 @@ All data merges into a single daily file using Johnny Decimal numbering (configu
 - Daily tracking → `72 Daily Tracking/YYYY/MM/YYYY-MM-DD.md`
 
 Each file has YAML frontmatter with health metrics, sleep stages, and workout entries. The file may also contain non-health data (moods, habits, weather) from other apps — the server preserves these during writes.
+
+**Frontmatter shape:**
+
+- Health metrics → one camelCase key per metric name, each an array of `{time, value, units, source?}`.
+  `heart_rate` uses `{time, avg, max, min, units, source?}`; blood pressure uses `{time, systolic, diastolic, units}`.
+- `sleepStages` → `{startTime, endTime, stage, duration, source?}` per stage.
+- `sleepSummary` → nightly totals derived from the *stored* stages, so it can never disagree with
+  them: `{totalSleep, awake, core, deep, rem, sleepStart, sleepEnd, segmentCount}`. No `inBed` —
+  Apple never sends an "In Bed" segment, so any value would just be `totalSleep + awake`.
+- `workoutEntries` → scalars carry their own `*Units` sibling (`distanceUnits`, `temperatureUnits`, …);
+  per-interval samples live in `activeEnergySeries`, `basalEnergySeries`, `walkingRunningDistanceSeries`.
+
+**`time` need not match the file's `date`.** `appleSleepingWristTemperature` and
+`breathingDisturbances` are stamped in the evening but describe the night that ends the next
+morning, so they are filed with that night's sleep. Every other metric is filed on the day it
+was recorded.
 
 ### Storage Internals
 
@@ -158,6 +175,7 @@ DEBUG_LOGGING        # true|false - Enable verbose debug logging (default: false
 SLEEP_SESSION_GAP_MINUTES  # Gap threshold for sleep sessions in minutes (default: 30)
 SLEEP_WINDOW_CUTOFF_HOUR   # Local hour from which sleep-window metrics are filed to the next day (default: 18)
 OBSIDIAN_TEMPLATE_BACKFILL_DAYS  # Days back within which an empty note body is re-templated (default: 7)
+SLEEP_WINDOW_CUTOFF_HOUR   # Local hour from which sleep-window metrics are filed to the next day (default: 18)
 
 # Optional - Obsidian paths (relative to OBSIDIAN_VAULT_PATH)
 OBSIDIAN_DAILY_PATH    # Daily tracking folder (default: 70-79 Journals & Self-Tracking/72 Daily Tracking)
