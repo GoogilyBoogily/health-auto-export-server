@@ -107,15 +107,25 @@ Each file has YAML frontmatter with health metrics, sleep stages, and workout en
 
 ### Known gap: fused frontmatter
 
-Some daily notes carry more than two `---` fences. `FRONTMATTER_REGEX` is non-greedy, so it takes
+Eight daily notes carry more than two `---` fences. `FRONTMATTER_REGEX` is non-greedy, so it takes
 block 1 and returns everything after as *body*, which the storage layer then preserves verbatim —
 a second block of real readings ends up invisible to this server, to `bun report:vault`, and to
-every downstream consumer. `bun report:vault` detects and lists them;
-`bun run scripts/repair-fused-frontmatter.ts` merges block 2 back into block 1.
+every downstream consumer. `bun report:vault` detects and lists them.
 
-Some of those second blocks are themselves damaged (`Nested mappings are not allowed in compact
-mappings`), which is the same corruption behind the `*.md.corrupt.*.bak` files in the vault. The
-repair skips those rather than guessing at a half-written mapping.
+`scripts/repair-fused-frontmatter.ts` is `WRITES_DISABLED` and must stay that way. Run once against
+the live vault, it silently discarded sleep stages, three workouts, a habit entry and two days of
+weather; the faults are structural and documented at the top of the file. Its dry run still finds
+the notes. There is no automated merge today.
+
+Three of the eight have a parseable second block — roughly 568 readings that exist nowhere else —
+but every one of them conflicts on `dailySummary`, where two weather writers disagree field by
+field. A human picks the winner. The other five have a second block no parser can read: two YAML
+lines welded into one by an interrupted write (`autonomy: 5 duration: 0.92`, a mood field spliced
+onto a sleep-stage field). Reconstructing the lost newline is a human job.
+
+Do not run the vault's `00-09 Meta & System/03 Scripts/dawarich-backfill-weather.js` until its
+line 791 merges rather than strips. Its "defensive" regex replaces a leading second block with the
+empty string, which deletes roughly 439 KB across seven of the eight notes.
 
 ### Logger
 
