@@ -15,3 +15,7 @@ seed_data/*
 health-auto-export-logs.log
 *-sample.json
 unified-sample.yaml
+
+# Agent tooling state (local, regenerated per session)
+.headroom/
+.codex/

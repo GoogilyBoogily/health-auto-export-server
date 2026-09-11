@@ -62,15 +62,20 @@ export interface ISimpleMeasurement {
 
 export interface WorkoutData {
   duration: number;
-  end: Date;
+  /** Raw string from the API until `prepareWorkouts` runs; never a real `Date` in practice. */
+  end: Date | string;
   id: string;
   name: string;
   sourceDate: string; // YYYY-MM-DD extracted from raw start date string before timezone conversion
-  start: Date;
+  /** Raw string from the API until `prepareWorkouts` runs; never a real `Date` in practice. */
+  start: Date | string;
   activeEnergy?: IQuantityMetric[];
   activeEnergyBurned?: IMeasurement | ISimpleMeasurement;
   avgHeartRate?: ISimpleMeasurement;
+  basalEnergy?: IQuantityMetric[];
   distance?: IMeasurement | ISimpleMeasurement;
+  elevationUp?: IMeasurement | ISimpleMeasurement;
+  flightsClimbed?: IMeasurement | ISimpleMeasurement;
   heartRate?: IHeartRateSummary;
   heartRateData?: IHeartRate[];
   heartRateRecovery?: IHeartRate[];
@@ -80,8 +85,10 @@ export interface WorkoutData {
   location?: string;
   maxHeartRate?: ISimpleMeasurement;
   metadata?: Record<string, unknown>;
-  route?: ILocation[];
+  speed?: IMeasurement | ISimpleMeasurement;
   stepCadence?: ISimpleMeasurement;
   stepCount?: IQuantityMetric[];
   temperature?: IMeasurement | ISimpleMeasurement;
+  totalEnergy?: IMeasurement | ISimpleMeasurement;
+  walkingAndRunningDistance?: IQuantityMetric[];
 }
