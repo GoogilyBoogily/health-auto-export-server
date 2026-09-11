@@ -4,8 +4,9 @@ import {
   logValidationWarning,
   mapMetric,
 } from '../mappers';
+import { MetricDataSchema } from '../validation/schemas';
 
-import type { IngestData, Metric } from '../types';
+import type { IngestData, Metric, MetricData } from '../types';
 import type { Logger } from '../utils/logger';
 
 /**
@@ -15,6 +16,35 @@ export interface MetricsPrepResult {
   newCount: number;
   newMetrics: Record<string, Metric[]>;
   skippedRecords: number;
+}
+
+/**
+ * Validate metric blocks one at a time.
+ * A malformed block is dropped and counted rather than failing the whole request, so one bad
+ * entry cannot discard a sync carrying dozens of good ones.
+ */
+function validateMetricBlocks(
+  rawMetrics: unknown[],
+  log?: Logger,
+): { skipped: number; valid: MetricData[] } {
+  const valid: MetricData[] = [];
+  let skipped = 0;
+
+  for (const candidate of rawMetrics) {
+    const parsed = MetricDataSchema.safeParse(candidate);
+    if (parsed.success) {
+      valid.push(parsed.data);
+      continue;
+    }
+
+    skipped++;
+    log?.warn('Skipping malformed metric block', {
+      issues: parsed.error.issues.slice(0, 3),
+      name: (candidate as null | { name?: unknown })?.name,
+    });
+  }
+
+  return { skipped, valid };
 }
 
 /**
@@ -28,15 +58,17 @@ export const prepareMetrics = (
 ): MetricsPrepResult | undefined => {
   const timer = log?.startTimer('prepareMetrics');
 
-  const metricsData = ingestData.data.metrics;
+  const rawMetrics = ingestData.data.metrics;
 
-  if (!metricsData || metricsData.length === 0) {
+  if (!rawMetrics || rawMetrics.length === 0) {
     log?.debug('No metrics data provided');
     timer?.end('info', 'No metrics to prepare');
     return undefined;
   }
 
-  log?.debug('Processing metrics', { rawMetricsCount: metricsData.length });
+  const { skipped: skippedBlocks, valid: metricsData } = validateMetricBlocks(rawMetrics, log);
+
+  log?.debug('Processing metrics', { rawMetricsCount: metricsData.length, skippedBlocks });
 
   // Debug: Log raw metrics data structure
   log?.debugLog('TRANSFORM', 'Raw metrics input', {
@@ -47,14 +79,11 @@ export const prepareMetrics = (
   // Create request-scoped context for validation tracking
   const mappingContext = createMappingContext(log);
 
-  // Group metrics by type and map the data.
-  // Lowercase the name so casing drift between payloads (e.g. "heart_rate" vs
-  // "Heart_Rate") collapses into a single bucket and produces a stable
-  // frontmatter key after snakeToCamelCase conversion.
+  // Group metrics by type and map the data
   const metricsByType: Record<string, Metric[]> = {};
   for (const metric of metricsData) {
     const mappedMetrics = mapMetric(metric, mappingContext);
-    const key = metric.name.toLowerCase();
+    const key = metric.name;
     metricsByType[key] ??= [];
     metricsByType[key].push(...mappedMetrics);
   }
@@ -77,14 +106,12 @@ export const prepareMetrics = (
   log?.debugLog('TRANSFORM', 'Metrics transformed and grouped', { byType: transformSummary });
 
   const newCount = Object.values(metricsByType).reduce((sum, m) => sum + m.length, 0);
-  timer?.end('info', 'Metrics prepared', {
-    newCount,
-    skippedRecords: validationStats.skippedRecords,
-  });
+  const skippedRecords = validationStats.skippedRecords + skippedBlocks;
+  timer?.end('info', 'Metrics prepared', { newCount, skippedRecords });
 
   return {
     newCount,
     newMetrics: metricsByType,
-    skippedRecords: validationStats.skippedRecords,
+    skippedRecords,
   };
 };

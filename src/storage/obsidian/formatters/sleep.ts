@@ -14,6 +14,7 @@ import type {
   SleepSegment,
   SleepStage,
   SleepStageEntry,
+  SleepSummary,
 } from '../../../types';
 
 /**
@@ -136,7 +137,48 @@ function collectAndSortSegments(sleepEntries: SleepMetric[]): SleepSegment[] {
 function isValidSleepStageEntry(entry: unknown): entry is SleepStageEntry {
   if (typeof entry !== 'object' || entry === null) return false;
   const candidate = entry as Partial<SleepStageEntry>;
-  return typeof candidate.startTime === 'string' && typeof candidate.stage === 'string';
+  return (
+    typeof candidate.startTime === 'string' &&
+    typeof candidate.endTime === 'string' &&
+    typeof candidate.stage === 'string' &&
+    KNOWN_STAGES.has(candidate.stage) &&
+    typeof candidate.duration === 'number' &&
+    Number.isFinite(candidate.duration)
+  );
+}
+
+const KNOWN_STAGES = new Set<string>(['asleep', 'awake', 'core', 'deep', 'rem']);
+
+/**
+ * Derive nightly totals from the stages actually stored.
+ *
+ * Computed after the merge rather than from the incoming request, so replaying a partial payload
+ * after a fuller one cannot leave a summary that disagrees with the stages beside it.
+ */
+function buildSleepSummary(entries: SleepStageEntry[]): SleepSummary {
+  const hours = { asleep: 0, awake: 0, core: 0, deep: 0, rem: 0 };
+  let earliestStart = entries[0].startTime;
+  let latestEnd = entries[0].endTime;
+
+  for (const entry of entries) {
+    hours[entry.stage] += entry.duration;
+    if (Date.parse(entry.startTime) < Date.parse(earliestStart)) earliestStart = entry.startTime;
+    if (Date.parse(entry.endTime) > Date.parse(latestEnd)) latestEnd = entry.endTime;
+  }
+
+  const summary: SleepSummary = {
+    awake: roundTo(hours.awake, 2),
+    core: roundTo(hours.core, 2),
+    deep: roundTo(hours.deep, 2),
+    rem: roundTo(hours.rem, 2),
+    segmentCount: entries.length,
+    sleepEnd: latestEnd,
+    sleepStart: earliestStart,
+    totalSleep: roundTo(hours.asleep + hours.core + hours.deep + hours.rem, 2),
+  };
+
+  if (hours.asleep > 0) summary.asleep = roundTo(hours.asleep, 2);
+  return summary;
 }
 
 /**
@@ -224,7 +266,9 @@ function populateFromSegments(frontmatter: DailyFrontmatter, segments: SleepSegm
     }
   }
 
-  frontmatter.sleepStages = merged.toSorted((a, b) => a.startTime.localeCompare(b.startTime));
+  const ordered = merged.toSorted((a, b) => Date.parse(a.startTime) - Date.parse(b.startTime));
+  frontmatter.sleepStages = ordered;
+  frontmatter.sleepSummary = buildSleepSummary(ordered);
 }
 
 /**

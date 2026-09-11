@@ -2,17 +2,19 @@
  * Date utilities for Obsidian frontmatter.
  */
 
+import { logger } from '../../../utils/logger';
+
 // TZ-stable: identical input → identical output regardless of server timezone.
 // Used as a dedup key, so any drift would create silent duplicates.
-//
-// Both regexes capture the offset hours/minutes so we can emit the canonical
-// `±HH:MM` form from inputs that arrive as either `±HHMM` or `±HH:MM`.
-// Fractional seconds are dropped during emit so payloads with vs without
-// milliseconds produce identical dedup keys.
 const HAE_DATE_REGEX =
   /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})\s*([+-])(\d{2}):?(\d{2})$/;
+// Captures the offset so the canonical `±HH:MM` form is emitted whether the input arrived as
+// `±HHMM` or `±HH:MM`. Fractional seconds are dropped on emit, so one instant spelled with and
+// without milliseconds produces one dedup key.
 const ISO_OFFSET_REGEX = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?([+-])(\d{2}):?(\d{2})$/;
 const ISO_UTC_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+// Capture groups mirror HAE_DATE_REGEX so both share group 4 = hour.
+const ISO_LOCAL_HOUR_REGEX = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/;
 
 export function formatIsoTimestamp(date: Date | string | undefined): string | undefined {
   if (!date) return undefined;
@@ -37,9 +39,6 @@ export function formatIsoTimestamp(date: Date | string | undefined): string | un
     }
   }
 
-  // Date input loses the original TZ offset (Date stores only an instant). The
-  // mapper preserves the raw string in `rawDate`/`rawStartTime`/`rawEndTime` so
-  // this branch is only hit when no raw string is available — fall back to UTC.
   const d = new Date(date);
   if (Number.isNaN(d.getTime())) return undefined;
 
@@ -64,12 +63,50 @@ export function getDateKey(date: Date | string): string {
     }
   }
 
-  // Fallback for Date objects or non-standard string formats
+  // Fallback: no embedded local date to read, so the server's own timezone decides the day.
+  // That makes the answer depend on where the process runs — the same instant resolves to a
+  // different file under UTC than under America/Chicago. Real Health Auto Export payloads
+  // never reach here; anything that does is worth knowing about.
   const d = new Date(date);
   const year = String(d.getFullYear());
   const month = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  const dateKey = `${year}-${month}-${day}`;
+
+  logger.warn('Date key derived from server timezone, not the payload', {
+    dateKey,
+    input: typeof date === 'string' ? date : d.toISOString(),
+    serverTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  });
+
+  return dateKey;
+}
+
+/**
+ * Read the local hour from a raw Health Auto Export timestamp.
+ *
+ * Reads the digits straight out of the string rather than constructing a `Date`, so the answer
+ * is the hour the user experienced, not the hour in the server's timezone. Returns undefined
+ * for anything that isn't the expected format, so callers can fall back deliberately.
+ */
+export function getLocalHour(date: Date | string): number | undefined {
+  if (typeof date !== 'string') return undefined;
+
+  const match = HAE_DATE_REGEX.exec(date.trim()) ?? ISO_LOCAL_HOUR_REGEX.exec(date.trim());
+  if (!match) return undefined;
+
+  const hour = Number(match[4]);
+  return Number.isNaN(hour) ? undefined : hour;
+}
+
+/**
+ * Advance a YYYY-MM-DD date key by one day.
+ * Uses UTC arithmetic so the result never depends on the server's timezone.
+ */
+export function nextDateKey(dateKey: string): string {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const next = new Date(Date.UTC(year, month - 1, day + 1));
+  return next.toISOString().slice(0, 10);
 }
 
 /**

@@ -193,7 +193,11 @@ export const CorsConfig = {
 // =============================================================================
 
 const FILE_LOCK_RETRY_DELAY_MS = 50;
-const FILE_LOCK_MAX_RETRIES = 100;
+// 20s of patience. A real ingest was observed holding one daily file for 15,370 ms, so the
+// previous 5s ceiling made a concurrent writer throw while the lock was still legitimately held —
+// and `staleTimeoutMs` never fired either, because 15.4s is well under 30s. Stays below
+// `staleTimeoutMs` so a lock from a dead process is still broken rather than waited out.
+const FILE_LOCK_MAX_RETRIES = 400;
 
 export const FileLockConfig = {
   /**
@@ -204,7 +208,7 @@ export const FileLockConfig = {
 
   /**
    * Maximum number of lock acquisition attempts.
-   * @default 100
+   * @default 400
    */
   maxRetries: FILE_LOCK_MAX_RETRIES,
 
@@ -265,6 +269,21 @@ export const ObsidianConfig = {
   ),
 
   /**
+   * Days back from today within which an empty note body is replaced with the body template.
+   *
+   * Only applies to notes whose body is empty or whitespace-only. A note with real body content
+   * is preserved regardless of age. Without this bound, a full-history re-export would retro-fill
+   * the template into hundreds of notes that have been empty since the vault was migrated.
+   * @env OBSIDIAN_TEMPLATE_BACKFILL_DAYS
+   * @default 7 (days)
+   */
+  templateBackfillDays: parseIntSafe(
+    process.env.OBSIDIAN_TEMPLATE_BACKFILL_DAYS,
+    7,
+    'OBSIDIAN_TEMPLATE_BACKFILL_DAYS',
+  ),
+
+  /**
    * Environment variable name for the Obsidian vault path.
    * @env OBSIDIAN_VAULT_PATH
    */
@@ -289,7 +308,165 @@ export const MetricsConfig = {
   ),
 
   /**
+   * Local hour from which a sleep-window measurement is attributed to the NEXT day.
+   *
+   * Apple stamps `apple_sleeping_wrist_temperature` and `breathing_disturbances` in the evening
+   * (20:00-22:00 observed), but they describe the night that ends the following morning — which
+   * is the day the sleep stages themselves are filed under. Without this shift a single night's
+   * data is split across two daily files.
+   *
+   * Raise it for a late sleeper, lower it for someone who turns in before 18:00.
+   * @env SLEEP_WINDOW_CUTOFF_HOUR
+   * @default 18
+   */
+  sleepWindowCutoffHour: parseIntSafe(
+    process.env.SLEEP_WINDOW_CUTOFF_HOUR,
+    18,
+    'SLEEP_WINDOW_CUTOFF_HOUR',
+  ),
+
+  /**
    * Valid sleep stage values from Health Auto Export.
    */
   validSleepStages: ['Asleep', 'Awake', 'Core', 'Deep', 'In Bed', 'REM'] as const,
+} as const;
+
+// =============================================================================
+// METRIC SHAPE CLASSIFICATION
+// =============================================================================
+
+/**
+ * Frontmatter keys the server has written that no current `MetricName` member maps to.
+ *
+ * The enum is not the set of keys this server owns — the default mapper branch writes whatever
+ * metric name arrives, so a name Apple has since renamed leaves a key behind that nothing in the
+ * enum reproduces. `alcoholConsumption` is one: readings exist in the vault in `MetricReading`
+ * shape, and `number_of_alcoholic_beverages` does not camel-case to it.
+ */
+export const LEGACY_OWNED_KEYS = ['alcoholConsumption'] as const;
+
+/**
+ * Metrics Health Auto Export delivers as one bucket per hour.
+ *
+ * These are the only metrics safe to deduplicate by hour. The exporter re-buckets the same
+ * samples against a different anchor on each sync, so two readings landing in one hour are the
+ * same hour re-reported, never two distinct measurements.
+ */
+export const HOURLY_BUCKETED_METRICS: ReadonlySet<string> = new Set([
+  'activeEnergy',
+  'appleExerciseTime',
+  'appleMoveTime',
+  'appleStandHour',
+  'appleStandTime',
+  'basalEnergyBurned',
+  'cyclingDistance',
+  'distanceDownhillSnowSports',
+  'flightsClimbed',
+  'stepCount',
+  'swimmingDistance',
+  'swimStrokeCount',
+  'timeInDaylight',
+  'walkingRunningDistance',
+  'wheelchairDistance',
+  'wheelchairPushCount',
+]);
+
+/**
+ * Cumulative metrics logged per event rather than per hour.
+ *
+ * Every dietary metric is a per-entry total from a food logger, and the activity counters below
+ * record discrete occurrences. Two entries inside one hour are two real events — a 09:00 meal and
+ * a 09:02 meal are not the same meal — so these must never be folded to the hour even though they
+ * are cumulative and summing them is meaningful.
+ */
+export const EVENT_TOTAL_METRICS: ReadonlySet<string> = new Set([
+  'alcoholConsumption',
+  'biotin',
+  'caffeine',
+  'calcium',
+  'carbohydrates',
+  'chloride',
+  'cholesterol',
+  'chromium',
+  'copper',
+  'dietaryEnergy',
+  'dietarySugar',
+  'dietaryWater',
+  'fiber',
+  'folate',
+  'handwashing',
+  'inhalerUsage',
+  'insulinDelivery',
+  'iodine',
+  'iron',
+  'magnesium',
+  'manganese',
+  'mindfulMinutes',
+  'molybdenum',
+  'monounsaturatedFat',
+  'niacin',
+  'numberOfAlcoholicBeverages',
+  'numberOfTimeFallen',
+  'pantothenicAcid',
+  'phosphorus',
+  'polyunsaturatedFat',
+  'potassium',
+  'protein',
+  'riboflavin',
+  'saturatedFat',
+  'selenium',
+  'sexualActivity',
+  'sodium',
+  'thiamin',
+  'toothbrushing',
+  'totalFat',
+  'vitaminA',
+  'vitaminB6',
+  'vitaminB12',
+  'vitaminC',
+  'vitaminD',
+  'vitaminE',
+  'vitaminK',
+  'zinc',
+]);
+
+/** Every metric whose readings are meaningful to sum over a day. */
+export const CUMULATIVE_METRICS: ReadonlySet<string> = new Set([
+  ...EVENT_TOTAL_METRICS,
+  ...HOURLY_BUCKETED_METRICS,
+]);
+
+// =============================================================================
+// HTTP STATUS CODES
+// =============================================================================
+
+export const HttpStatus = {
+  BAD_REQUEST: 400,
+  INTERNAL_SERVER_ERROR: 500,
+  MULTI_STATUS: 207,
+  OK: 200,
+  REQUEST_TIMEOUT: 408,
+  TOO_MANY_REQUESTS: 429,
+  UNAUTHORIZED: 401,
+} as const;
+
+// =============================================================================
+// COMBINED EXPORT
+// =============================================================================
+
+/**
+ * Complete application configuration.
+ * Import this for access to all configuration sections.
+ */
+export const config = {
+  auth: AuthConfig,
+  cors: CorsConfig,
+  fileLock: FileLockConfig,
+  httpStatus: HttpStatus,
+  metrics: MetricsConfig,
+  obsidian: ObsidianConfig,
+  rateLimit: RateLimitConfig,
+  request: RequestConfig,
+  retry: RetryConfig,
+  server: ServerConfig,
 } as const;

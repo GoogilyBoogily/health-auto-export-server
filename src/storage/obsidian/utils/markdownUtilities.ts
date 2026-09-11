@@ -5,7 +5,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { parse as parseYaml, Scalar, stringify as stringifyYaml } from 'yaml';
+import { Document, parseDocument, Scalar } from 'yaml';
 
 import { ObsidianConfig } from '../../../config';
 import { logger } from '../../../utils/logger';
@@ -13,7 +13,30 @@ import { getDateKey } from './dateUtilities';
 
 import type { DailyFrontmatter } from '../../../types';
 
+/**
+ * A parsed daily file.
+ *
+ * `document` carries the original YAML syntax tree. Keeping it lets writes replace only the
+ * keys this server owns, so foreign keys written by other apps (weather, mood, habits) keep
+ * their exact formatting — bare ISO timestamps stay bare, empty scalars stay empty, and
+ * comments survive. Absent when the file had no frontmatter block to begin with.
+ */
+export interface ParsedMarkdown {
+  body: string;
+  document: Document | undefined;
+  frontmatter: DailyFrontmatter | undefined;
+}
+
+const YAML_STRINGIFY_OPTIONS = {
+  doubleQuotedAsJSON: false,
+  indent: 2,
+  lineWidth: 0, // Disable line wrapping
+  singleQuote: false,
+} as const;
+
 const FRONTMATTER_REGEX = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/;
+const LEADING_BOM_REGEX = /^\uFEFF/;
+const LEADING_BLANK_LINES_REGEX = /^\s*\n/;
 
 /**
  * Get the file path for a daily tracking file.
@@ -48,7 +71,7 @@ export function getDailyFilePath(vaultPath: string, date: Date | string): string
  */
 export function getDefaultBody(date: Date | string): string {
   const dateKey = getDateKey(date);
-  return ObsidianConfig.bodyTemplate.replace('{{date}}', dateKey);
+  return ObsidianConfig.bodyTemplate.replaceAll('{{date}}', dateKey);
 }
 
 /**
@@ -85,55 +108,93 @@ export async function listMarkdownFiles(directory: string): Promise<string[]> {
 /**
  * Parse a markdown file with YAML frontmatter.
  * Returns frontmatter object and body content.
- * `parseFailed` flags malformed YAML so callers can preserve a backup of
- * the corrupt original before any rewrite overwrites recoverable user data.
+ *
+ * A file with no frontmatter block at all is a genuine new-file case and returns undefined.
+ * A file whose frontmatter block exists but does not parse THROWS: continuing would overwrite
+ * the unreadable data with a fresh minimal frontmatter, which is the loudest possible way to
+ * lose a day of metrics. A file we cannot read is not a file we may replace.
  */
-export function parseMarkdown(content: string): {
-  body: string;
-  frontmatter: DailyFrontmatter | undefined;
-  parseFailed?: boolean;
-} {
-  const match = FRONTMATTER_REGEX.exec(content);
+export function parseMarkdown(content: string): ParsedMarkdown {
+  const match = FRONTMATTER_REGEX.exec(normalizeForFrontmatter(content));
   if (!match) {
-    return { body: content, frontmatter: undefined };
+    return { body: content, document: undefined, frontmatter: undefined };
   }
 
-  try {
-    const frontmatter = parseYaml(match[1]) as DailyFrontmatter;
-    return { body: match[2], frontmatter };
-  } catch (error) {
-    logger.warn('Failed to parse YAML frontmatter, treating as plain markdown', { error });
-    return { body: content, frontmatter: undefined, parseFailed: true };
+  // parseDocument collects errors instead of throwing, so check them explicitly.
+  const document = parseDocument(match[1]);
+  if (document.errors.length > 0) {
+    throw new Error(document.errors.map((error) => error.message).join('; '));
   }
+
+  return { body: match[2], document, frontmatter: document.toJS() as DailyFrontmatter };
 }
 
 /**
  * Read a markdown file with frontmatter.
- * Returns undefined if file doesn't exist. When YAML parsing fails, backs up
- * the original content alongside the file before returning so the next write
- * cannot silently destroy user-edited keys.
+ * Returns undefined if file doesn't exist.
+ *
+ * Unparseable frontmatter is backed up alongside the file and then rethrown. The backup keeps the
+ * bytes recoverable; the throw keeps this server from replacing a day of metrics it could not
+ * read. Doing only the first would reset the live note to fresh frontmatter, and doing only the
+ * second would leave no copy of whatever damaged it.
  */
-export async function readMarkdownFile(filePath: string): Promise<
-  | undefined
-  | {
-      body: string;
-      frontmatter: DailyFrontmatter | undefined;
-      parseFailed?: boolean;
-    }
-> {
+export async function readMarkdownFile(filePath: string): Promise<ParsedMarkdown | undefined> {
+  let content: string;
   try {
-    const content = await fs.readFile(filePath, 'utf8');
-    const parsed = parseMarkdown(content);
-    if (parsed.parseFailed) {
-      await backupCorruptFile(filePath, content);
-    }
-    return parsed;
+    content = await fs.readFile(filePath, 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return undefined;
     }
     throw error;
   }
+
+  try {
+    return parseMarkdown(content);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : 'Unknown error';
+    await backupCorruptFile(filePath, content);
+    logger.error('Unreadable frontmatter — refusing to overwrite', error, { filePath });
+    throw new Error(`Unreadable YAML frontmatter in ${filePath}: ${detail}`);
+  }
+}
+
+/**
+ * Decide the body to write: preserve what is there, or seed the template.
+ *
+ * Three cases, and the middle one is a bug fix. A file created by another app — the weather
+ * writer gets there first on most days — has frontmatter and no body. `serializeMarkdown` then
+ * normalises that empty body to `'\n'`, which is a stable fixed point.
+ *
+ * `'\n'` is both non-nullish and TRUTHY, so `existing?.body ?? …` and `existing?.body || …` BOTH
+ * preserve it forever and the template never applies again. Only a `.trim()` test sees it.
+ * Do not "simplify" this to `||`.
+ *
+ * The backfill window bounds the repair: a full-history re-export must not retro-fill the
+ * template into hundreds of notes that have been legitimately empty for years. A brand-new file
+ * is always templated regardless of age — otherwise backfilling old data would create notes with
+ * no body at all.
+ */
+export function resolveBody(dateKey: string, existingBody: string | undefined): string {
+  if (existingBody === undefined) return getDefaultBody(dateKey);
+  if (existingBody.trim()) return existingBody;
+  return isWithinTemplateBackfillWindow(dateKey) ? getDefaultBody(dateKey) : existingBody;
+}
+
+/**
+ * Is this date recent enough to seed an empty note with the body template?
+ *
+ * UTC arithmetic, matching `nextDateKey`, so the answer never depends on the server's timezone.
+ */
+function isWithinTemplateBackfillWindow(dateKey: string): boolean {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const noteDay = Date.UTC(year, month - 1, day);
+
+  const now = new Date();
+  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+
+  const daysAgo = (today - noteDay) / 86_400_000;
+  return daysAgo <= ObsidianConfig.templateBackfillDays;
 }
 
 /**
@@ -146,17 +207,17 @@ const ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{
  * Serialize frontmatter and body to markdown string.
  * Ensures the output always ends with a newline.
  */
-export function serializeMarkdown(frontmatter: DailyFrontmatter, body: string): string {
-  // Prepare frontmatter to ensure ISO timestamps are double-quoted
-  const preparedFrontmatter = prepareForYaml(frontmatter);
+export function serializeMarkdown(
+  frontmatter: DailyFrontmatter,
+  body: string,
+  document?: Document,
+): string {
+  // Reuse the original document when there is one so untouched keys keep their exact
+  // formatting; otherwise build a fresh one for a brand-new file.
+  const target = document ?? new Document({});
+  applyOwnedKeys(target, frontmatter);
 
-  // Custom YAML options for consistent formatting
-  const yamlContent = stringifyYaml(preparedFrontmatter, {
-    doubleQuotedAsJSON: false,
-    indent: 2,
-    lineWidth: 0, // Disable line wrapping
-    singleQuote: false,
-  });
+  const yamlContent = target.toString(YAML_STRINGIFY_OPTIONS);
 
   // Ensure body ends with a newline
   const normalizedBody = body.endsWith('\n') ? body : `${body}\n`;
@@ -171,6 +232,7 @@ export async function writeMarkdownFile(
   filePath: string,
   frontmatter: DailyFrontmatter,
   body: string,
+  document?: Document,
 ): Promise<void> {
   // Ensure directory exists
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -178,7 +240,7 @@ export async function writeMarkdownFile(
   // Write atomically using temp file + rename
   // eslint-disable-next-line sonarjs/pseudo-random -- Not security-critical
   const temporaryPath = `${filePath}.tmp.${String(Date.now())}.${Math.random().toString(36).slice(2)}`;
-  const content = serializeMarkdown(frontmatter, body);
+  const content = serializeMarkdown(frontmatter, body, document);
 
   try {
     await fs.writeFile(temporaryPath, content, 'utf8');
@@ -195,8 +257,24 @@ export async function writeMarkdownFile(
 }
 
 /**
- * Save a backup of a file whose YAML frontmatter could not be parsed, so a
- * subsequent rewrite cannot silently destroy recoverable user-edited keys.
+ * Write back only the keys this server owns.
+ *
+ * A key counts as owned when the formatters produced a value that differs from what the file
+ * already held. Untouched keys are never re-serialized, so a foreign app's bare ISO timestamps,
+ * empty scalars and comments survive verbatim instead of being normalized on every ingest.
+ */
+function applyOwnedKeys(document: Document, frontmatter: DailyFrontmatter): void {
+  const existing = (document.toJS() as Record<string, unknown> | null) ?? {};
+
+  for (const [key, value] of Object.entries(frontmatter)) {
+    if (JSON.stringify(existing[key]) === JSON.stringify(value)) continue;
+    document.set(key, prepareForYaml(value));
+  }
+}
+
+/**
+ * Save a backup of a file whose YAML frontmatter could not be parsed, so the bytes stay
+ * recoverable even though this server refuses to rewrite the file.
  * Backup name: `<filePath>.corrupt.<timestamp>.bak`. Idempotent on the
  * same millisecond — failures here are logged but never thrown.
  */
@@ -209,6 +287,20 @@ async function backupCorruptFile(filePath: string, content: string): Promise<voi
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') return;
     logger.error('Failed to back up corrupt frontmatter file', error, { backupPath, filePath });
   }
+}
+
+/**
+ * Normalize a file's leading bytes so frontmatter detection survives editors and sync
+ * clients that write a BOM, CRLF line endings, or a blank line before the opening `---`.
+ *
+ * Without this, one stray byte makes the whole file parse as body text and the next write
+ * starts from empty frontmatter, silently demoting every metric already stored for that day.
+ */
+function normalizeForFrontmatter(content: string): string {
+  return content
+    .replace(LEADING_BOM_REGEX, '')
+    .replaceAll('\r\n', '\n')
+    .replace(LEADING_BLANK_LINES_REGEX, '');
 }
 
 /**

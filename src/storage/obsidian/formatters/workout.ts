@@ -9,9 +9,11 @@ import { formatIsoTimestamp, roundTo } from '../utils/dateUtilities';
 import type {
   DailyFrontmatter,
   HeartRateReading,
+  IQuantityMetric,
   RecoveryReading,
   WorkoutData,
   WorkoutEntry,
+  WorkoutSeriesReading,
 } from '../../../types';
 
 /**
@@ -122,6 +124,20 @@ function extractRecoveryReadings(workout: WorkoutData): RecoveryReading[] | unde
 }
 
 /**
+ * Convert a per-interval sample array into timestamped readings.
+ * Returns undefined for an absent or empty series so the key stays off the entry entirely.
+ */
+function extractSeries(samples: IQuantityMetric[] | undefined): WorkoutSeriesReading[] | undefined {
+  if (!samples || samples.length === 0) return undefined;
+
+  return samples.map((sample) => ({
+    time: formatIsoTimestamp(sample.date) ?? '',
+    units: sample.units,
+    value: sample.qty,
+  }));
+}
+
+/**
  * Merge two readings arrays by `time`, with incoming entries winning on collision.
  * Preserves prior entries for timestamps the new payload omitted, preventing
  * truncated re-pushes from shrinking the series.
@@ -161,26 +177,70 @@ function mergeWorkoutEntry(prior: WorkoutEntry, incoming: WorkoutEntry): Workout
 }
 
 /**
- * Add optional scalar fields to a workout entry.
+ * Add energy, distance and elevation totals, each with the units that produced them.
+ *
+ * Guards test `!== undefined` rather than truthiness so a legitimate zero — a stationary
+ * indoor workout logs zero distance — is stored rather than silently dropped.
  */
-function populateOptionalFields(entry: WorkoutEntry, workout: WorkoutData): void {
-  // Add energy/distance
-  if (workout.activeEnergyBurned?.qty) {
+function populateDistanceAndEnergy(entry: WorkoutEntry, workout: WorkoutData): void {
+  if (workout.activeEnergyBurned?.qty !== undefined) {
     entry.activeEnergy = roundTo(workout.activeEnergyBurned.qty, 2);
+    entry.activeEnergyUnits = workout.activeEnergyBurned.units;
   }
-  if (workout.distance?.qty) {
+  if (workout.totalEnergy?.qty !== undefined) {
+    entry.totalEnergy = roundTo(workout.totalEnergy.qty, 2);
+    entry.totalEnergyUnits = workout.totalEnergy.units;
+  }
+  if (workout.distance?.qty !== undefined) {
     entry.distance = roundTo(workout.distance.qty, 2);
+    entry.distanceUnits = workout.distance.units;
   }
+  if (workout.elevationUp?.qty !== undefined) {
+    entry.elevationUp = roundTo(workout.elevationUp.qty, 2);
+    entry.elevationUpUnits = workout.elevationUp.units;
+  }
+  if (workout.speed?.qty !== undefined) {
+    entry.speed = roundTo(workout.speed.qty, 2);
+    entry.speedUnits = workout.speed.units;
+  }
+  if (workout.flightsClimbed?.qty !== undefined) {
+    entry.flightsClimbed = Math.round(workout.flightsClimbed.qty);
+  }
+}
 
-  // Add step data
+/**
+ * Add environment readings and where the workout took place.
+ */
+function populateEnvironment(entry: WorkoutEntry, workout: WorkoutData): void {
+  if (workout.intensity?.qty !== undefined) {
+    entry.intensity = roundTo(workout.intensity.qty, 2);
+    entry.intensityUnits = workout.intensity.units;
+  }
+  if (workout.temperature?.qty !== undefined) {
+    entry.temperature = roundTo(workout.temperature.qty, 2);
+    entry.temperatureUnits = workout.temperature.units;
+  }
+  if (workout.humidity?.qty !== undefined) {
+    entry.humidity = roundTo(workout.humidity.qty, 2);
+  }
+  if (workout.location !== undefined) {
+    entry.location = workout.location;
+  }
+  if (workout.isIndoor !== undefined) {
+    entry.isIndoor = workout.isIndoor;
+  }
+}
+
+/**
+ * Add step totals and heart rate summaries.
+ */
+function populateStepsAndHeartRate(entry: WorkoutEntry, workout: WorkoutData): void {
   if (workout.stepCount && workout.stepCount.length > 0) {
     entry.stepCount = Math.round(workout.stepCount.reduce((sum, s) => sum + s.qty, 0));
   }
   if (workout.stepCadence?.qty !== undefined) {
     entry.stepCadence = roundTo(workout.stepCadence.qty, 1);
   }
-
-  // Add heart rate summaries
   if (workout.avgHeartRate?.qty !== undefined) {
     entry.avgHeartRate = Math.round(workout.avgHeartRate.qty);
   }
@@ -189,19 +249,6 @@ function populateOptionalFields(entry: WorkoutEntry, workout: WorkoutData): void
   }
   if (workout.heartRate?.min?.qty !== undefined) {
     entry.minHeartRate = Math.round(workout.heartRate.min.qty);
-  }
-
-  // Add intensity
-  if (workout.intensity?.qty !== undefined) {
-    entry.intensity = roundTo(workout.intensity.qty, 2);
-  }
-
-  // Add location info
-  if (workout.location !== undefined) {
-    entry.location = workout.location;
-  }
-  if (workout.isIndoor !== undefined) {
-    entry.isIndoor = workout.isIndoor;
   }
 }
 
@@ -243,7 +290,20 @@ function workoutToEntry(workout: WorkoutData): WorkoutEntry {
     entry.recoveryReadings = recoveryReadings;
   }
 
-  populateOptionalFields(entry, workout);
+  // Per-interval series. The scalar totals summarise the workout; these preserve the shape of
+  // it — pace and burn curves that a single number cannot express.
+  const activeEnergySeries = extractSeries(workout.activeEnergy);
+  if (activeEnergySeries) entry.activeEnergySeries = activeEnergySeries;
+
+  const basalEnergySeries = extractSeries(workout.basalEnergy);
+  if (basalEnergySeries) entry.basalEnergySeries = basalEnergySeries;
+
+  const distanceSeries = extractSeries(workout.walkingAndRunningDistance);
+  if (distanceSeries) entry.walkingRunningDistanceSeries = distanceSeries;
+
+  populateDistanceAndEnergy(entry, workout);
+  populateStepsAndHeartRate(entry, workout);
+  populateEnvironment(entry, workout);
 
   logger.debugTransform(
     'Workout transformed to entry',

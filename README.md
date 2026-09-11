@@ -20,7 +20,7 @@ A self-hosted server for ingesting Apple Health data exported via the [Health Au
 - **Bun Runtime** — Fast startup and execution
 - **Atomic Writes** — Temp file + rename prevents data corruption
 - **File Locking** — Concurrent write protection with stale lock detection
-- **Deduplication** — Health metrics by timestamp upsert, workouts by `appleWorkoutId`
+- **Deduplication** — Health metrics by a metric-aware instant key, workouts by `appleWorkoutId`
 - **Retry with Exponential Backoff** — Automatic retries for Obsidian storage operations
 - **Rate Limiting** — 100 requests per minute per IP
 - **Request Timeout** — 2-minute request processing limit
@@ -274,9 +274,12 @@ heart_rate:
 
 Deduplication happens during the Obsidian merge step — no separate cache needed:
 
-- **Health metrics:** Upserted by timestamp (same time = overwrite)
-- **Workouts:** Upserted by `appleWorkoutId`
-- **Sleep:** Overwritten entirely per date
+- **Health metrics:** Upserted by the parsed instant and device set. Metrics the exporter sends as
+  one bucket per hour fold to the hour; dietary and per-occurrence metrics keep every entry;
+  discrete metrics keep every reading. The larger value wins a collapse
+- **Workouts:** Upserted by `appleWorkoutId`; time-series arrays merged by `time`
+- **Sleep:** Stages merged by same-stage interval overlap, so a boundary revision replaces its
+  predecessor instead of duplicating it
 
 ---
 

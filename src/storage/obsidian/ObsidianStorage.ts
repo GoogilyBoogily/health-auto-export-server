@@ -14,9 +14,9 @@ import { createSleepFrontmatter, groupSleepMetricsByDate } from './formatters/sl
 import { createWorkoutFrontmatter, groupWorkoutsByDate } from './formatters/workout';
 import {
   getDailyFilePath,
-  getDefaultBody,
   listMarkdownFiles,
   readMarkdownFile,
+  resolveBody,
   writeMarkdownFile,
 } from './utils/markdownUtilities';
 
@@ -281,14 +281,17 @@ export class ObsidianStorage {
       }
 
       // Preserve existing body or generate default
-      const body = existing?.body ?? getDefaultBody(dateKey);
+      // An empty body is stored as '\n', which is truthy — see resolveBody.
+      const body = resolveBody(dateKey, existing?.body);
 
       logger.debugLog('STORAGE', `Daily frontmatter for ${dateKey}`, {
         frontmatterKeys: Object.keys(frontmatter),
         isNew,
       });
 
-      await writeMarkdownFile(filePath, frontmatter, body);
+      // Pass the original document so only keys we own get re-serialized; foreign keys
+      // (weather, moods, habits) keep their exact formatting.
+      await writeMarkdownFile(filePath, frontmatter, body, existing?.document);
 
       return { isNew };
     });

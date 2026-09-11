@@ -26,3 +26,6 @@ jobs:
 
       - name: Build smoke
         run: bun run build:check
+
+      - name: Run self-check
+        run: bun run check

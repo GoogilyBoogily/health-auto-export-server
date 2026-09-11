@@ -168,6 +168,18 @@ export default tseslint.config(
 
   // Ignores
   {
-    ignores: ['node_modules/**', 'dist/**', 'coverage/**', 'scripts/**', 'data/**', '.remember/**'],
+    ignores: [
+      'node_modules/**',
+      'dist/**',
+      'coverage/**',
+      'scripts/**',
+      'data/**',
+      // Tooling scratch directories - not part of the project's TS program
+      '.claude/**',
+      '.codex/**',
+      '.headroom/**',
+      '.remember/**',
+      '.serena/**',
+    ],
   },
 );
