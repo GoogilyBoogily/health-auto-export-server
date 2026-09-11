@@ -16,6 +16,7 @@ import { ingestData } from '../src/controllers/ingester';
 import { prepareMetrics } from '../src/controllers/metrics';
 import { createHealthFrontmatter } from '../src/storage/obsidian/formatters/health';
 import { createSleepFrontmatter } from '../src/storage/obsidian/formatters/sleep';
+import { createWorkoutFrontmatter } from '../src/storage/obsidian/formatters/workout';
 import { initObsidianStorage } from '../src/storage';
 import { resolveBody, serializeMarkdown } from '../src/storage/obsidian/utils/markdownUtilities';
 import { Logger } from '../src/utils/logger';
@@ -330,6 +331,33 @@ pass('non-string dates are rejected and counted');
   );
 
   pass('an empty body is re-templated inside the backfill window, never outside it');
+}
+
+// --- Workouts predating `appleWorkoutId` all keyed to `undefined` and deleted each other. ---
+{
+  const legacy = (hour: number, workoutType: string) => ({
+    duration: 30,
+    endTime: `2026-08-11T${String(hour).padStart(2, '0')}:30:00-05:00`,
+    startTime: `2026-08-11T${String(hour).padStart(2, '0')}:00:00-05:00`,
+    workoutId: workoutType.toLowerCase(),
+    workoutType,
+  });
+  const stored = {
+    date: '2026-08-11',
+    workoutEntries: [legacy(6, 'Running'), legacy(12, 'Walking'), legacy(18, 'Yoga')],
+  };
+
+  // The trigger is any write to that date, not a workout payload — 349 vault files are one
+  // ordinary sync away from this.
+  const merged = createWorkoutFrontmatter('2026-08-11', [], stored as never);
+  const kept = merged.workoutEntries as { workoutType: string }[];
+  assert.equal(kept.length, 3, 'three ID-less workouts on one date all survive a write');
+  assert.deepEqual(
+    kept.map((entry) => entry.workoutType),
+    ['Running', 'Walking', 'Yoga'],
+    'and they are the same three workouts, not one repeated',
+  );
+  pass('workouts with no appleWorkoutId are kept distinct by startTime');
 }
 
 console.log(`\n${String(checks.length)} checks passed. Scratch: ${scratch}`);

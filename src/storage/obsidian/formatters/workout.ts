@@ -41,10 +41,11 @@ export function createWorkoutFrontmatter(
   let allEntries: WorkoutEntry[];
   const existingEntries = frontmatter.workoutEntries;
   if (existingEntries && existingEntries.length > 0) {
-    const existingMap = new Map(existingEntries.map((entry) => [entry.appleWorkoutId, entry]));
+    const existingMap = new Map(existingEntries.map((entry) => [workoutKey(entry), entry]));
     for (const entry of newEntries) {
-      const prior = existingMap.get(entry.appleWorkoutId);
-      existingMap.set(entry.appleWorkoutId, prior ? mergeWorkoutEntry(prior, entry) : entry);
+      const key = workoutKey(entry);
+      const prior = existingMap.get(key);
+      existingMap.set(key, prior ? mergeWorkoutEntry(prior, entry) : entry);
     }
     allEntries = [...existingMap.values()];
   } else {
@@ -263,6 +264,19 @@ function toWorkoutId(name: string): string {
       // eslint-disable-next-line sonarjs/anchor-precedence -- Intentional: match either start-dash or dash-end
       .replaceAll(/^-|-$/g, '')
   );
+}
+
+/**
+ * Stable identity for the workout upsert.
+ *
+ * 1,546 of the 2,782 workouts already in the vault carry no `appleWorkoutId` — the whole pre-2021
+ * backfill predates it. Keying the merge Map on that field alone sent every ID-less workout on a
+ * date to the same `undefined` slot, so the next write to that date kept one and silently dropped
+ * the rest: 923 entries across 349 files, eight collapsing to one on `2020-01-07`. They are
+ * distinct workouts, and `startTime` is what tells them apart — verified unique across all 349.
+ */
+function workoutKey(entry: WorkoutEntry): string {
+  return entry.appleWorkoutId ?? `start:${entry.startTime}`;
 }
 
 /**

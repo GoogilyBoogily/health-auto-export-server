@@ -113,7 +113,6 @@ export interface SleepSummary {
 // ===== WORKOUT ENTRY =====
 
 export interface WorkoutEntry {
-  appleWorkoutId: string; // Original workout ID from Apple Health
   duration: number; // minutes
   endTime: string; // ISO timestamp with timezone
   startTime: string; // ISO timestamp with timezone
@@ -122,6 +121,10 @@ export interface WorkoutEntry {
   activeEnergy?: number; // total for the workout, unit in activeEnergyUnits
   activeEnergySeries?: WorkoutSeriesReading[]; // per-interval active energy
   activeEnergyUnits?: string;
+  // Original workout ID from Apple Health. Optional because 1,546 of the 2,782 workouts already
+  // stored — the whole pre-2021 backfill — do not have one. Declaring it required told the
+  // compiler a fallback key was dead code while the merge was silently dropping those workouts.
+  appleWorkoutId?: string;
   avgHeartRate?: number; // bpm
   basalEnergySeries?: WorkoutSeriesReading[]; // per-interval basal energy
   distance?: number;
