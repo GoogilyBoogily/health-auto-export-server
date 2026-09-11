@@ -31,6 +31,32 @@ import type { DailyFrontmatter } from '../src/types';
 
 const DAILY_NOTE = /^\d{4}-\d{2}-\d{2}\.md$/;
 
+/**
+ * DISABLED FOR WRITES. Two independent audits found this script destroys data, and it did:
+ * run once against the live vault on 2026-09-11, it silently discarded 18 and 29 sleep stages,
+ * 3 workouts with 145 per-minute heart-rate samples, a habit entry, and 24-48 hours of weather.
+ * All of it was restored from backup.
+ *
+ * The faults are structural, not cosmetic:
+ *   - `OWNED_KEYS` misses `sleepStages`, `workoutEntries`, `habitEntries`, `hourlyData` and
+ *     `moodEntries` (`sleep_analysis` camel-cases to `sleepAnalysis`), so every one of them takes
+ *     the "block 1 wins, block 2 discarded" branch — and a discard is never reported.
+ *   - `splitBlocks` assumes fences pair as (0,1) then (2,3). A note with three fences — an
+ *     ordinary Markdown horizontal rule in the body — has its body deleted and its frontmatter
+ *     filled with single-character keys.
+ *   - `planFile` commits a partial merge and swallows the error when a later block is damaged,
+ *     leaving the note in the three-fence state the previous point destroys.
+ *   - `collapseReadings` runs over block 1's own readings as a side effect of merging, so the
+ *     report shows gains while the file shrinks by 70%.
+ *   - Writes are a bare `writeFileSync` — no temp-and-rename, no lock — while Obsidian is running.
+ *
+ * Dry run still works and is still the way to find fused notes. Re-enable only after the merge is
+ * rewritten to pair fences explicitly, refuse odd fence counts, merge foreign arrays by identity,
+ * report every discard, and leave historical de-duplication to `heal-vault.ts`.
+ */
+const WRITES_DISABLED = true;
+
+
 const OWNED_KEYS = new Set<string>([
   ...Object.values(MetricName).map((name) => snakeToCamelCase(name)),
   ...LEGACY_OWNED_KEYS,
@@ -184,6 +210,12 @@ if (!vaultPath) {
 
 const todayNote = `${new Date().toISOString().slice(0, 10)}.md`;
 const notes = findDailyNotes(vaultPath).filter((file) => path.basename(file) !== todayNote);
+
+if (commit && WRITES_DISABLED) {
+  console.error('--commit is disabled: this merge is known to discard data. See the note at the');
+  console.error('top of this file. Dry run still works and still finds fused notes.');
+  process.exit(1);
+}
 
 console.log(`${commit ? 'REPAIRING' : 'DRY RUN'} — scanning ${String(notes.length)} daily notes`);
 if (!commit) console.log('Nothing will be written. Pass --commit to apply.\n');
