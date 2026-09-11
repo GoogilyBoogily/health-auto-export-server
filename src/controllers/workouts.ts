@@ -1,4 +1,5 @@
 import { prepareWorkouts } from '../mappers';
+import { WorkoutDataSchema } from '../validation/schemas';
 
 import type { IngestData, WorkoutData } from '../types';
 import type { Logger } from '../utils/logger';
@@ -9,6 +10,36 @@ import type { Logger } from '../utils/logger';
 export interface WorkoutsPrepResult {
   newCount: number;
   newWorkouts: WorkoutData[];
+  skippedRecords: number;
+}
+
+/**
+ * Validate workouts one at a time.
+ * A malformed workout is dropped and counted rather than failing the whole request, so one
+ * bad entry cannot discard the others in the same payload.
+ */
+function validateWorkouts(
+  rawWorkouts: unknown[],
+  log?: Logger,
+): { skipped: number; valid: WorkoutData[] } {
+  const valid: WorkoutData[] = [];
+  let skipped = 0;
+
+  for (const candidate of rawWorkouts) {
+    const parsed = WorkoutDataSchema.safeParse(candidate);
+    if (parsed.success) {
+      valid.push(parsed.data as unknown as WorkoutData);
+      continue;
+    }
+
+    skipped++;
+    log?.warn('Skipping malformed workout', {
+      id: (candidate as null | { id?: unknown })?.id,
+      issues: parsed.error.issues.slice(0, 3),
+    });
+  }
+
+  return { skipped, valid };
 }
 
 /**
@@ -30,10 +61,12 @@ export const prepareWorkoutsData = (
     return undefined;
   }
 
-  // Extract sourceDate from raw date strings before any Date conversion
-  const workouts = prepareWorkouts(rawWorkouts);
+  const { skipped: skippedRecords, valid } = validateWorkouts(rawWorkouts, log);
 
-  log?.debug('Processing workouts', { count: workouts.length });
+  // Extract sourceDate from raw date strings before any Date conversion
+  const workouts = prepareWorkouts(valid);
+
+  log?.debug('Processing workouts', { count: workouts.length, skippedRecords });
 
   // Debug: Log raw workouts input
   log?.debugLog('TRANSFORM', 'Raw workouts input', {
@@ -46,7 +79,7 @@ export const prepareWorkoutsData = (
     })),
   });
 
-  timer?.end('info', 'Workouts prepared', { newCount: workouts.length });
+  timer?.end('info', 'Workouts prepared', { newCount: workouts.length, skippedRecords });
 
-  return { newCount: workouts.length, newWorkouts: workouts };
+  return { newCount: workouts.length, newWorkouts: workouts, skippedRecords };
 };

@@ -4,7 +4,7 @@
  */
 
 import { MetricsConfig } from '../config';
-import { getDateKey } from '../storage/obsidian/utils/dateUtilities';
+import { getDateKey, getLocalHour, nextDateKey } from '../storage/obsidian/utils/dateUtilities';
 import { MetricName } from '../types';
 import { Logger, ValidationStats } from '../utils/logger';
 
@@ -19,11 +19,21 @@ import type {
   SleepSegmentRaw,
   SleepStage,
   SleepStageValue,
-  WristTemperatureMetric,
 } from '../types';
 
 // Valid sleep stage values from Health Auto Export
 const VALID_SLEEP_STAGES_SET = new Set<string>(MetricsConfig.validSleepStages);
+
+/**
+ * Metrics measured during sleep but stamped at bedtime.
+ *
+ * Apple files these against the evening they start, while the sleep stages for the same night
+ * are filed against the morning you wake up. Left alone, one night's data lands in two files.
+ */
+const SLEEP_WINDOW_METRICS = new Set<string>([
+  MetricName.APPLE_SLEEPING_WRIST_TEMPERATURE,
+  MetricName.BREATHING_DISTURBANCES,
+]);
 
 /**
  * Request-scoped context for tracking validation stats.
@@ -86,14 +96,27 @@ export function logValidationWarning(context: MappingContext): void {
 }
 
 /**
- * Check if an object has all required fields defined (not undefined or null).
+ * Check that every required field is present and correctly typed.
+ *
+ * `date` is the only non-numeric required field across all metric shapes; everything else
+ * (qty, systolic/diastolic, Avg/Max/Min) is a measurement and must be a finite number. That
+ * makes the check branch-aware for free — no per-metric-type configuration needed.
+ *
+ * Presence alone is not enough: Zod passes metric datums through untyped, so a stringified or
+ * object-valued quantity would otherwise reach the vault verbatim. `date` is checked just as
+ * strictly, because it decides the filename: a boolean or a number reaches `new Date()` intact
+ * and files the reading under 1969-12-31, and an array stringifies a day early.
  */
 function hasRequiredFields(object: unknown, fields: string[]): boolean {
   if (!object || typeof object !== 'object') return false;
   const record = object as Record<string, unknown>;
-  return fields.every(
-    (field) => field in record && record[field] !== undefined && record[field] !== null,
-  );
+
+  return fields.every((field) => {
+    const value = record[field];
+    if (value === undefined || value === null) return false;
+    if (field === 'date') return typeof value === 'string' || value instanceof Date;
+    return typeof value === 'number' && Number.isFinite(value);
+  });
 }
 
 /**
@@ -139,6 +162,23 @@ function isValidSleepStage(value: unknown): value is SleepStageValue {
 }
 
 /**
+ * Decide which daily file a measurement belongs in.
+ *
+ * For sleep-window metrics an evening reading describes the night ahead, so it is attributed
+ * to the following day — matching where that night's sleep stages are stored. Everything else
+ * keeps the date it was recorded on.
+ */
+function resolveSourceDate(metricName: string, rawDate: Date | string): string {
+  const dateKey = getDateKey(rawDate);
+  if (!SLEEP_WINDOW_METRICS.has(metricName)) return dateKey;
+
+  const hour = getLocalHour(rawDate);
+  if (hour === undefined || hour < MetricsConfig.sleepWindowCutoffHour) return dateKey;
+
+  return nextDateKey(dateKey);
+}
+
+/**
  * Convert uppercase sleep stage value to lowercase.
  * Only accepts validated SleepStageValue inputs.
  */
@@ -167,28 +207,8 @@ export const mapMetric = (
   let result: (BloodPressureMetric | HeartRateMetric | Metric | SleepMetric)[];
 
   switch (metricName) {
-    case MetricName.APPLE_SLEEPING_WRIST_TEMPERATURE: {
-      // Wrist temperature needs end date for accurate night attribution
-      const wristTemporaryData = metric.data as (BaseMetric & { end?: string })[];
-      result = wristTemporaryData
-        .filter((m) => isValidMetricData(m, ['date', 'qty'], 'base_metric', context))
-        .map((measurement): WristTemperatureMetric => {
-          context.stats.processedRecords++;
-          return {
-            date: new Date(measurement.date),
-            endDate: measurement.end ? new Date(measurement.end) : new Date(measurement.date),
-            metadata: measurement.metadata,
-            qty: measurement.qty,
-            rawDate: typeof measurement.date === 'string' ? measurement.date : undefined,
-            source: measurement.source,
-            sourceDate: getDateKey(measurement.date),
-            units: metric.units,
-          };
-        });
-      break;
-    }
     case MetricName.BLOOD_PRESSURE: {
-      const rawData = metric.data as unknown[];
+      const rawData = metric.data;
       result = rawData
         .filter((m): m is BloodPressureMetric =>
           isValidMetricData(m, ['date', 'systolic', 'diastolic'], 'blood_pressure', context),
@@ -209,7 +229,7 @@ export const mapMetric = (
       break;
     }
     case MetricName.HEART_RATE: {
-      const rawData = metric.data as unknown[];
+      const rawData = metric.data;
       result = rawData
         .filter((m): m is HeartRateMetric =>
           isValidMetricData(m, ['date', 'Avg', 'Max', 'Min'], 'heart_rate', context),
@@ -231,15 +251,17 @@ export const mapMetric = (
       break;
     }
     case MetricName.SLEEP_ANALYSIS: {
-      const rawData = metric.data as unknown[];
+      const rawData = metric.data;
 
-      // Detect format: segment data has 'value' and 'startDate' fields
+      // Segment data has 'value', 'startDate' and 'endDate' fields.
       if (isSegmentFormat(rawData)) {
         result = aggregateSegments(rawData as SleepSegmentRaw[], metric.units, context);
         break;
       }
 
-      // Legacy aggregated format (pre-aggregated totals)
+      // Legacy aggregated payloads carry per-stage totals plus a sleep and bed window rather
+      // than segments. The sleep formatter synthesizes stage entries from them, so they are
+      // mapped rather than dropped.
       const sleepData = rawData as SleepMetric[];
       result = sleepData.map((measurement) => ({
         asleep: measurement.asleep,
@@ -262,7 +284,7 @@ export const mapMetric = (
       break;
     }
     default: {
-      const rawData = metric.data as unknown[];
+      const rawData = metric.data;
       result = rawData
         .filter((m): m is BaseMetric =>
           isValidMetricData(m, ['date', 'qty'], 'base_metric', context),
@@ -275,7 +297,7 @@ export const mapMetric = (
             qty: measurement.qty,
             rawDate: typeof measurement.date === 'string' ? measurement.date : undefined,
             source: measurement.source,
-            sourceDate: getDateKey(measurement.date),
+            sourceDate: resolveSourceDate(metric.name, measurement.date),
             units: metric.units,
           };
         });
@@ -294,14 +316,16 @@ export const mapMetric = (
  * then calculates totals for each session.
  */
 function aggregateSegments(
-  segments: SleepSegmentRaw[],
+  segments: unknown[],
   units: string,
   context: MappingContext,
 ): SleepMetric[] {
   if (segments.length === 0) return [];
 
   // Filter out invalid segments before processing
-  const validSegments = segments.filter((seg) => isValidSleepSegment(seg, context));
+  const validSegments = segments.filter((seg): seg is SleepSegmentRaw =>
+    isValidSleepSegment(seg, context),
+  );
 
   if (validSegments.length === 0) return [];
 
@@ -318,8 +342,9 @@ function aggregateSegments(
     const first = session[0];
     const last = session.at(-1) ?? first;
 
-    // Separate "In Bed" segments (bed window metadata) from sleep stage segments
-    const inBedSegments = session.filter((seg) => seg.value === 'In Bed');
+    // "In Bed" rows are bed-window metadata, not a sleep stage. Apple has not sent one in any
+    // observed payload, but the filter stays so that if it starts, the row is not counted as
+    // sleep time.
     const sleepSegments = session.filter((seg) => seg.value !== 'In Bed');
 
     // Aggregate by stage type
@@ -328,7 +353,9 @@ function aggregateSegments(
       totals[seg.value as keyof typeof totals] += seg.qty;
     }
 
-    // Use "In Bed" segments for bed window if available, otherwise fall back to sleep segments
+    // Bed window, for the legacy aggregated shape consumers still read. "In Bed" rows give it
+    // directly when present; otherwise the session's own extent is the best available answer.
+    const inBedSegments = session.filter((seg) => seg.value === 'In Bed');
     const bedStart =
       inBedSegments.length > 0 ? new Date(inBedSegments[0].startDate) : new Date(first.startDate);
     const bedEnd =
@@ -341,7 +368,6 @@ function aggregateSegments(
     const sleepStart = new Date(sleepFirst.startDate);
     const sleepEnd = new Date(sleepLast.endDate);
 
-    const inBedHours = (bedEnd.getTime() - bedStart.getTime()) / (1000 * 60 * 60);
     const asleepHours = totals.Asleep + totals.Core + totals.Deep + totals.REM;
 
     // Convert sleep segments (excluding "In Bed") to typed SleepSegment objects
@@ -361,7 +387,7 @@ function aggregateSegments(
       core: totals.Core,
       date: sleepStart,
       deep: totals.Deep,
-      inBed: inBedHours,
+      inBed: (bedEnd.getTime() - bedStart.getTime()) / (1000 * 60 * 60),
       inBedEnd: bedEnd,
       inBedStart: bedStart,
       rem: totals.REM,
@@ -389,26 +415,31 @@ function aggregateSegments(
 function groupIntoSessions(segments: SleepSegmentRaw[]): SleepSegmentRaw[][] {
   const sessions: SleepSegmentRaw[][] = [];
   let currentSession: SleepSegmentRaw[] = [];
+  // Track the furthest end seen so far, not just the previous segment's. Segments are sorted
+  // by start, so one long enveloping segment (an "In Bed" row spanning the night) would
+  // otherwise reset the baseline and split the night into spurious sessions.
+  let sessionEndMs = 0;
 
   for (const segment of segments) {
+    const segmentEndMs = new Date(segment.endDate).getTime();
+
     if (currentSession.length === 0) {
       currentSession.push(segment);
+      sessionEndMs = segmentEndMs;
       continue;
     }
 
-    const lastSegment = currentSession.at(-1);
-    if (!lastSegment) continue;
-    const previousEnd = new Date(lastSegment.endDate);
-    const currentStart = new Date(segment.startDate);
-    const gapMs = currentStart.getTime() - previousEnd.getTime();
-    const gapMins = gapMs / (1000 * 60);
+    const currentStartMs = new Date(segment.startDate).getTime();
+    const gapMins = (currentStartMs - sessionEndMs) / (1000 * 60);
 
     if (gapMins > MetricsConfig.sessionGapThresholdMinutes) {
       // Gap too large, start new session
       sessions.push(currentSession);
       currentSession = [segment];
+      sessionEndMs = segmentEndMs;
     } else {
       currentSession.push(segment);
+      sessionEndMs = Math.max(sessionEndMs, segmentEndMs);
     }
   }
 
@@ -425,27 +456,45 @@ function groupIntoSessions(segments: SleepSegmentRaw[]): SleepSegmentRaw[][] {
  * Aggregated format has 'sleepStart', 'core', 'deep', 'rem' fields.
  */
 function isSegmentFormat(data: unknown[]): boolean {
-  if (data.length === 0) return false;
-  const first = data[0] as Record<string, unknown>;
+  const first = data[0];
+  if (!first || typeof first !== 'object') return false;
   return 'value' in first && 'startDate' in first && 'endDate' in first;
 }
 
 /**
  * Validate a sleep segment has valid duration, time range, and stage value.
+ *
+ * `qty` is type-checked, not just compared: `undefined <= 0` is false, so an absent duration
+ * used to pass straight through and surface as `.nan` in the stored stage and every total
+ * derived from it.
  */
-function isValidSleepSegment(segment: SleepSegmentRaw, context: MappingContext): boolean {
-  // Duration must be positive
-  if (segment.qty <= 0) {
+function isValidSleepSegment(segment: unknown, context: MappingContext): boolean {
+  if (!segment || typeof segment !== 'object') {
+    context.stats.typeMismatches++;
+    context.stats.skippedRecords++;
+    return false;
+  }
+
+  const candidate = segment as Partial<SleepSegmentRaw>;
+
+  // Duration must be a real, positive number of hours
+  if (typeof candidate.qty !== 'number' || !Number.isFinite(candidate.qty)) {
+    context.stats.typeMismatches++;
+    context.stats.skippedRecords++;
+    context.logger?.debugTypeMismatch('sleep_segment', ['qty'], segment);
+    return false;
+  }
+  if (candidate.qty <= 0) {
     context.stats.skippedRecords++;
     return false;
   }
 
   // Validate sleep stage value
-  if (!isValidSleepStage(segment.value)) {
+  if (!isValidSleepStage(candidate.value)) {
     context.stats.unknownStages++;
     context.stats.skippedRecords++;
     context.logger?.debugUnknownSleepStage(
-      segment.value,
+      candidate.value,
       [...MetricsConfig.validSleepStages],
       segment,
     );
@@ -453,14 +502,14 @@ function isValidSleepSegment(segment: SleepSegmentRaw, context: MappingContext):
   }
 
   // Check for invalid dates (NaN)
-  const startTime = new Date(segment.startDate).getTime();
-  const endTime = new Date(segment.endDate).getTime();
+  const startTime = new Date(candidate.startDate ?? '').getTime();
+  const endTime = new Date(candidate.endDate ?? '').getTime();
 
   if (Number.isNaN(startTime) || Number.isNaN(endTime)) {
     context.stats.invalidDates++;
     context.stats.skippedRecords++;
     context.logger?.debugInvalidDate(
-      { endDate: segment.endDate, startDate: segment.startDate },
+      { endDate: candidate.endDate, startDate: candidate.startDate },
       'sleep_segment',
     );
     return false;

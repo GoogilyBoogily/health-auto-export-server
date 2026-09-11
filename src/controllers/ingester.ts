@@ -12,6 +12,9 @@ import type { Logger } from '../utils/logger';
 import type { MetricsPrepResult } from './metrics';
 import type { WorkoutsPrepResult } from './workouts';
 
+/** The data kinds a request can carry. */
+type DataKind = 'metrics' | 'workouts';
+
 interface PrepResults {
   response: IngestResponse;
   metricsPrep?: MetricsPrepResult;
@@ -19,26 +22,75 @@ interface PrepResults {
 }
 
 /**
- * Surface validation-skipped record count to the client so silent drops are visible.
+ * Surface validation-skipped record counts to the client so silent drops are visible.
  * Mutates response in place.
  */
-function attachSkippedCount(response: IngestResponse, metricsPrep?: MetricsPrepResult): void {
-  if (!metricsPrep || metricsPrep.skippedRecords <= 0) return;
-  response.metrics ??= { success: true };
-  response.metrics.skippedRecords = metricsPrep.skippedRecords;
+function attachSkippedCounts(
+  response: IngestResponse,
+  metricsPrep?: MetricsPrepResult,
+  workoutsPrep?: WorkoutsPrepResult,
+): void {
+  if (metricsPrep && metricsPrep.skippedRecords > 0) {
+    response.metrics ??= { success: true };
+    response.metrics.skippedRecords = metricsPrep.skippedRecords;
+  }
+  if (workoutsPrep && workoutsPrep.skippedRecords > 0) {
+    response.workouts ??= { success: true };
+    response.workouts.skippedRecords = workoutsPrep.skippedRecords;
+  }
+}
+
+/**
+ * Which kinds this request actually sent. Read from the raw envelope rather than from the prep
+ * results, so a preparation step that threw still counts as attempted.
+ */
+function attemptedKinds(data: IngestData): DataKind[] {
+  const kinds: DataKind[] = [];
+  if ((data.data.metrics?.length ?? 0) > 0) kinds.push('metrics');
+  if ((data.data.workouts?.length ?? 0) > 0) kinds.push('workouts');
+  return kinds;
+}
+
+/**
+ * A stable fingerprint of a payload, for spotting the same sync arriving twice.
+ *
+ * Counts rather than contents: two deliveries of one export agree on every count, and a genuinely
+ * new sync almost never does.
+ */
+function describePayload(data: IngestData): string {
+  const metricBlocks = data.data.metrics?.length ?? 0;
+  const workouts = data.data.workouts?.length ?? 0;
+  const datums = (data.data.metrics ?? []).reduce<number>(
+    (total, block) => total + ((block as null | { data?: unknown[] })?.data?.length ?? 0),
+    0,
+  );
+  return `blocks=${String(metricBlocks)} datums=${String(datums)} workouts=${String(workouts)}`;
 }
 
 /**
  * Determine HTTP status code from response.
+ *
+ * Anything dropped during validation yields 207, not 200: the request partially succeeded and
+ * saying so is the whole point of counting the drops. A 200 with a `skippedRecords` field
+ * buried in the body is exactly the silent partial success this is meant to surface.
+ *
+ * Only the data kinds the request actually carried count towards the verdict. The placeholder
+ * this controller writes for an absent kind ("No workout data provided") reports success, and
+ * every real request carries metrics or workouts but never both — so counting placeholders made
+ * "everything failed" unreachable and answered a total storage failure with 207. A 2xx tells the
+ * exporter the sync landed, and it never sends it again.
  */
-function getResponseStatus(response: IngestResponse): number {
-  const values = [response.metrics, response.workouts].filter(
-    (r): r is NonNullable<typeof r> => r !== undefined,
-  );
-  const allFailed = values.every((r) => !r.success);
-  if (allFailed) return 500;
+function getResponseStatus(response: IngestResponse, attempted: DataKind[]): number {
+  const values = attempted
+    .map((kind) => response[kind])
+    .filter((r): r is NonNullable<typeof r> => r !== undefined);
+  if (values.length === 0) return 200;
+
+  if (values.every((r) => !r.success)) return 500;
+
   const hasErrors = values.some((r) => !r.success);
-  return hasErrors ? 207 : 200;
+  const hasSkips = values.some((r) => (r.skippedRecords ?? 0) > 0);
+  return hasErrors || hasSkips ? 207 : 200;
 }
 
 /**
@@ -50,18 +102,19 @@ async function processIngestion(
 ): Promise<{ response: IngestResponse; status: number }> {
   // PHASE 1: Data preparation (mapping + validation)
   const { metricsPrep, response, workoutsPrep } = runDataPreparation(data, log);
+  const attempted = attemptedKinds(data);
 
   const hasNewMetrics = metricsPrep !== undefined && metricsPrep.newCount > 0;
   const hasNewWorkouts = workoutsPrep !== undefined && workoutsPrep.newCount > 0;
 
   if (!hasNewMetrics && !hasNewWorkouts) {
-    attachSkippedCount(response, metricsPrep);
-    return { response, status: getResponseStatus(response) };
+    attachSkippedCounts(response, metricsPrep, workoutsPrep);
+    return { response, status: getResponseStatus(response, attempted) };
   }
 
   // PHASE 2: Write to Obsidian
   const emptyMetrics: MetricsPrepResult = { newCount: 0, newMetrics: {}, skippedRecords: 0 };
-  const emptyWorkouts: WorkoutsPrepResult = { newCount: 0, newWorkouts: [] };
+  const emptyWorkouts: WorkoutsPrepResult = { newCount: 0, newWorkouts: [], skippedRecords: 0 };
   await writeToObsidian(
     metricsPrep ?? emptyMetrics,
     workoutsPrep ?? emptyWorkouts,
@@ -71,9 +124,9 @@ async function processIngestion(
     log,
   );
 
-  attachSkippedCount(response, metricsPrep);
+  attachSkippedCounts(response, metricsPrep, workoutsPrep);
 
-  return { response, status: getResponseStatus(response) };
+  return { response, status: getResponseStatus(response, attempted) };
 }
 
 /**
@@ -154,6 +207,9 @@ async function writeToObsidian(
       log,
       maxRetries: RetryConfig.maxRetries,
       operationName: 'Obsidian write',
+      // saveDailyData reports per-date write failures by returning, not throwing, so the
+      // retry has to be told what failure looks like or it would never fire.
+      shouldRetry: (result) => !result.success,
     },
   );
 
@@ -207,11 +263,15 @@ export const ingestData = async (req: Request, res: Response) => {
 
     const data = parseResult.data as IngestData;
 
+    // Envelope validation only — element shapes are still unvalidated here, so read names
+    // defensively rather than assuming them.
+    const readName = (entry: unknown): unknown => (entry as null | { name?: unknown })?.name;
+
     log.debugValidationPassed({
       metricsCount: data.data.metrics?.length ?? 0,
-      metricTypes: data.data.metrics?.map((m) => m.name) ?? [],
+      metricTypes: data.data.metrics?.map((m) => readName(m)) ?? [],
       workoutsCount: data.data.workouts?.length ?? 0,
-      workoutTypes: data.data.workouts?.map((w) => w.name) ?? [],
+      workoutTypes: data.data.workouts?.map((w) => readName(w)) ?? [],
     });
 
     log.info('Processing ingestion request', {
@@ -222,6 +282,21 @@ export const ingestData = async (req: Request, res: Response) => {
     });
 
     const { response, status } = await processIngestion(data, log);
+
+    // The exporter has never received a 207 from us — every status in ~20,000 logged client
+    // events is 200 or 401 — so nobody knows whether it treats one as delivered or retries.
+    // A retry would silently re-send the same payload and compound duplication. Log a stable
+    // signature of what we answered 207 to; an identical signature appearing twice in the log
+    // is the exporter retrying, and that is the whole answer.
+    if (status === 207) {
+      log.warn('Answered 207 — watch for this signature repeating, which means a client retry', {
+        payloadSignature: describePayload(data),
+        skipped: {
+          metrics: response.metrics?.skippedRecords ?? 0,
+          workouts: response.workouts?.skippedRecords ?? 0,
+        },
+      });
+    }
 
     timer.end(status === 200 ? 'info' : 'warn', 'Ingestion completed', {
       hasPartialErrors: status === 207,

@@ -1,10 +1,15 @@
 import { z } from 'zod';
 
-// Flexible metric data schema - accepts various metric formats
-const MetricEntrySchema = z.record(z.string(), z.unknown());
-
-const MetricDataSchema = z.object({
-  data: z.array(MetricEntrySchema).optional(),
+/**
+ * One metric block. Applied per element so a single malformed block is skipped and counted
+ * rather than rejecting an entire sync of 70 well-formed blocks.
+ *
+ * `data` elements stay `unknown` on purpose. Validating them here would make one bad datum
+ * fail the whole array — a 300-datum block discarded and reported as a single skipped record.
+ * The mapper checks each datum individually, where the counting is already per-datum.
+ */
+export const MetricDataSchema = z.object({
+  data: z.array(z.unknown()),
   name: z.string(),
   units: z.string(),
 });
@@ -35,28 +40,26 @@ const HeartRateSummarySchema = z
   })
   .optional();
 
-// Location schema for workout routes
-const LocationSchema = z.object({
-  altitude: z.number().optional(),
-  course: z.number().optional(),
-  courseAccuracy: z.number().optional(),
-  horizontalAccuracy: z.number().optional(),
-  latitude: z.number(),
-  longitude: z.number(),
-  speed: z.number().optional(),
-  speedAccuracy: z.number().optional(),
-  timestamp: z.union([z.string(), z.date()]),
-  verticalAccuracy: z.number().optional(),
-});
-
-// Workout data schema
-const WorkoutDataSchema = z.object({
+/**
+ * One workout. Applied per element so a single malformed workout is skipped and counted
+ * rather than rejecting the whole payload.
+ *
+ * Every field the app actually sends is declared here. Zod strips undeclared keys, so an
+ * omission is silent data loss — `basalEnergy`, `elevationUp`, `speed`, `totalEnergy` and
+ * `walkingAndRunningDistance` arrive on every workout and were previously being dropped at
+ * this boundary. `route` is deliberately absent: nothing stores GPS points, so validating
+ * ~1400 of them per workout bought nothing.
+ */
+export const WorkoutDataSchema = z.object({
   activeEnergy: z.array(z.record(z.string(), z.unknown())).optional(),
   activeEnergyBurned: MeasurementSchema,
   avgHeartRate: SimpleMeasurementSchema.optional(),
+  basalEnergy: z.array(z.record(z.string(), z.unknown())).optional(),
   distance: MeasurementSchema,
   duration: z.number(),
+  elevationUp: MeasurementSchema,
   end: z.union([z.string(), z.date()]),
+  flightsClimbed: MeasurementSchema,
   heartRate: HeartRateSummarySchema,
   heartRateData: z.array(z.record(z.string(), z.unknown())).optional(),
   heartRateRecovery: z.array(z.record(z.string(), z.unknown())).optional(),
@@ -68,17 +71,23 @@ const WorkoutDataSchema = z.object({
   maxHeartRate: SimpleMeasurementSchema.optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   name: z.string(),
-  route: z.array(LocationSchema).optional(),
+  speed: MeasurementSchema,
   start: z.union([z.string(), z.date()]),
   stepCadence: SimpleMeasurementSchema.optional(),
   stepCount: z.array(z.record(z.string(), z.unknown())).optional(),
   temperature: MeasurementSchema,
+  totalEnergy: MeasurementSchema,
+  walkingAndRunningDistance: z.array(z.record(z.string(), z.unknown())).optional(),
 });
 
-// Main ingest data schema
+/**
+ * Request envelope. Deliberately loose: only a genuinely unusable shape (no `data` object,
+ * or `metrics`/`workouts` not arrays) rejects the request. Individual elements are validated
+ * in the controllers so one bad datum cannot discard a sync carrying thousands of good ones.
+ */
 export const IngestDataSchema = z.object({
   data: z.object({
-    metrics: z.array(MetricDataSchema).optional(),
-    workouts: z.array(WorkoutDataSchema).optional(),
+    metrics: z.array(z.unknown()).optional(),
+    workouts: z.array(z.unknown()).optional(),
   }),
 });

@@ -42,8 +42,15 @@ export interface MetricCommon {
   source?: string;
 }
 
+/**
+ * A validated metric block as it arrives from the API, before mapping.
+ *
+ * `data` is deliberately `unknown[]`: raw datums are not `Metric` objects — they carry string
+ * dates and per-type key sets (qty, or Avg/Max/Min, or sleep segment fields). Conflating the
+ * two is what forced every mapper branch to cast.
+ */
 export interface MetricData {
-  data: Metric[];
+  data: unknown[];
   name: MetricName | string;
   units: string;
 }
@@ -52,6 +59,7 @@ export interface SleepMetric extends MetricCommon {
   awake: number;
   core: number;
   deep: number;
+  /** Legacy aggregated payloads only; segment payloads never carry a bed window. */
   inBed: number;
   inBedEnd: Date;
   inBedStart: Date;
