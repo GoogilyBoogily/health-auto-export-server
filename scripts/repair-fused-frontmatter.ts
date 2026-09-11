@@ -117,9 +117,35 @@ function mergeBlocks(first: DailyFrontmatter, second: DailyFrontmatter): Map<str
   return recovered;
 }
 
-/** The whole decision for one file, and the only place bytes are produced. */
+/**
+ * The whole decision for one file, and the only place bytes are produced.
+ *
+ * Folds repeatedly: a note can carry more than one stray block, and merging the first leaves the
+ * next one still sitting in the body. Looping here means one `--commit` finishes the file rather
+ * than leaving it half-repaired for a second run nobody remembers to do.
+ */
 function planFile(filePath: string): RepairPlan | string | undefined {
-  const blocks = splitBlocks(readFileSync(filePath, 'utf8'));
+  let content = readFileSync(filePath, 'utf8');
+  const recovered = new Map<string, number>();
+  let merges = 0;
+
+  for (;;) {
+    const step = planOnce(content);
+    if (step === undefined) break;
+    if (typeof step === 'string') return merges > 0 ? { after: content, recovered } : step;
+    content = step.after;
+    merges++;
+    for (const [key, count] of step.recovered) {
+      recovered.set(key, (recovered.get(key) ?? 0) + count);
+    }
+  }
+
+  return merges > 0 ? { after: content, recovered } : undefined;
+}
+
+/** One fold: merge the first stray block back into the first block. */
+function planOnce(content: string): RepairPlan | string | undefined {
+  const blocks = splitBlocks(content);
   if (!blocks) return undefined;
 
   const firstDoc = parseDocument(blocks.firstRaw, { uniqueKeys: false });
