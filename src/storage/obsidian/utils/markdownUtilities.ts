@@ -71,7 +71,7 @@ export function getDailyFilePath(vaultPath: string, date: Date | string): string
  */
 export function getDefaultBody(date: Date | string): string {
   const dateKey = getDateKey(date);
-  return ObsidianConfig.bodyTemplate.replace('{{date}}', dateKey);
+  return ObsidianConfig.bodyTemplate.replaceAll('{{date}}', dateKey);
 }
 
 /**
@@ -157,6 +157,44 @@ export async function readMarkdownFile(filePath: string): Promise<ParsedMarkdown
     logger.error('Unreadable frontmatter — refusing to overwrite', error, { filePath });
     throw new Error(`Unreadable YAML frontmatter in ${filePath}: ${detail}`);
   }
+}
+
+/**
+ * Decide the body to write: preserve what is there, or seed the template.
+ *
+ * Three cases, and the middle one is a bug fix. A file created by another app — the weather
+ * writer gets there first on most days — has frontmatter and no body. `serializeMarkdown` then
+ * normalises that empty body to `'\n'`, which is a stable fixed point.
+ *
+ * `'\n'` is both non-nullish and TRUTHY, so `existing?.body ?? …` and `existing?.body || …` BOTH
+ * preserve it forever and the template never applies again. Only a `.trim()` test sees it.
+ * Do not "simplify" this to `||`.
+ *
+ * The backfill window bounds the repair: a full-history re-export must not retro-fill the
+ * template into hundreds of notes that have been legitimately empty for years. A brand-new file
+ * is always templated regardless of age — otherwise backfilling old data would create notes with
+ * no body at all.
+ */
+export function resolveBody(dateKey: string, existingBody: string | undefined): string {
+  if (existingBody === undefined) return getDefaultBody(dateKey);
+  if (existingBody.trim()) return existingBody;
+  return isWithinTemplateBackfillWindow(dateKey) ? getDefaultBody(dateKey) : existingBody;
+}
+
+/**
+ * Is this date recent enough to seed an empty note with the body template?
+ *
+ * UTC arithmetic, matching `nextDateKey`, so the answer never depends on the server's timezone.
+ */
+function isWithinTemplateBackfillWindow(dateKey: string): boolean {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const noteDay = Date.UTC(year, month - 1, day);
+
+  const now = new Date();
+  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+
+  const daysAgo = (today - noteDay) / 86_400_000;
+  return daysAgo <= ObsidianConfig.templateBackfillDays;
 }
 
 /**
