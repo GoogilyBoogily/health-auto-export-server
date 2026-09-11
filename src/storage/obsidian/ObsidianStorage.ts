@@ -288,7 +288,9 @@ export class ObsidianStorage {
         isNew,
       });
 
-      await writeMarkdownFile(filePath, frontmatter, body);
+      // Pass the original document so only keys we own get re-serialized; foreign keys
+      // (weather, moods, habits) keep their exact formatting.
+      await writeMarkdownFile(filePath, frontmatter, body, existing?.document);
 
       return { isNew };
     });
