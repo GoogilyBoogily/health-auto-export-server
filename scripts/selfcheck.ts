@@ -14,7 +14,7 @@ import path from 'node:path';
 
 import { ingestData } from '../src/controllers/ingester';
 import { prepareMetrics } from '../src/controllers/metrics';
-import { createHealthFrontmatter } from '../src/storage/obsidian/formatters/health';
+import { collapseReadings, createHealthFrontmatter } from '../src/storage/obsidian/formatters/health';
 import { createSleepFrontmatter } from '../src/storage/obsidian/formatters/sleep';
 import { createWorkoutFrontmatter } from '../src/storage/obsidian/formatters/workout';
 import { initObsidianStorage } from '../src/storage';
@@ -347,8 +347,9 @@ pass('non-string dates are rejected and counted');
     workoutEntries: [legacy(6, 'Running'), legacy(12, 'Walking'), legacy(18, 'Yoga')],
   };
 
-  // The trigger is any write to that date, not a workout payload — 349 vault files are one
-  // ordinary sync away from this.
+  // The trigger is a workout payload landing on that date, not any write: `saveDailyForDate`
+  // guards the workout formatter behind `if (workoutData)`, so a metrics-only sync leaves them
+  // alone. Measured, after an earlier claim here got it wrong. 349 vault files hold two or more.
   const merged = createWorkoutFrontmatter('2026-08-11', [], stored as never);
   const kept = merged.workoutEntries as { workoutType: string }[];
   assert.equal(kept.length, 3, 'three ID-less workouts on one date all survive a write');
@@ -358,6 +359,50 @@ pass('non-string dates are rejected and counted');
     'and they are the same three workouts, not one repeated',
   );
   pass('workouts with no appleWorkoutId are kept distinct by startTime');
+}
+
+// --- The collapse winner is the larger reading, never whichever happened to arrive last. ---
+{
+  const heartRate = (avg: number, max: number, min: number) => ({
+    avg,
+    max,
+    min,
+    source: 'watch',
+    time: '2026-04-12T08:00:00-05:00',
+    units: 'count/min',
+  });
+  const quiet = heartRate(91.998, 101, 84);
+  const loud = heartRate(95.007, 108, 88);
+
+  for (const order of [
+    [quiet, loud],
+    [loud, quiet],
+  ]) {
+    const [kept] = collapseReadings('heart_rate', order);
+    assert.equal(kept.avg, 95.007, 'the larger heart rate wins whichever order it arrives in');
+  }
+
+  // Blood pressure reads its magnitude from `systolic`, so a shape-blind comparison scores both
+  // sides as 0 and the last write silently wins — which erases the hypertensive reading.
+  const bloodPressure = (systolic: number, diastolic: number) => ({
+    diastolic,
+    source: 'cuff',
+    systolic,
+    time: '2026-04-12T08:00:00-05:00',
+    units: 'mmHg',
+  });
+  const normal = bloodPressure(118, 74);
+  const high = bloodPressure(140, 90);
+
+  for (const order of [
+    [normal, high],
+    [high, normal],
+  ]) {
+    const [kept] = collapseReadings('blood_pressure', order);
+    assert.equal(kept.systolic, 140, 'a hypertensive reading is never erased by arrival order');
+  }
+
+  pass('the collapse winner is the larger reading, not the last one');
 }
 
 console.log(`\n${String(checks.length)} checks passed. Scratch: ${scratch}`);
